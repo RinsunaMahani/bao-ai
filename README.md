@@ -23,10 +23,12 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green"></a>
 </p>
 
-> **🎓 Final Year Project.** Bao AI was designed, built and evaluated as my
-> final-year undergraduate project. It is an academic project: it is
-> not a commercial product and it is not maintained as a production
-> service.
+> **🎓 Final Year Project.** Bao AI was designed, built and evaluated by
+> **Rinsuna Blessing Mahani** as a final-year project for the
+> **Bachelor of Science (BSc) in Mathematics** at
+> **Sefako Makgatho Health Sciences University**, South Africa.
+> It is an academic project: it is not a commercial product and it is
+> not maintained as a production service.
 
 ## At a glance
 
@@ -465,7 +467,9 @@ Stated here so they are read rather than discovered.
 
 ## Author
 
-**Rinsuna Mahani** · [@RinsunaMahani](https://github.com/RinsunaMahani)
+**Rinsuna Blessing Mahani** · [@RinsunaMahani](https://github.com/RinsunaMahani)
+
+BSc Mathematics · Sefako Makgatho Health Sciences University
 
 Built as a final-year project. Feedback and questions are welcome through
 [GitHub Issues](https://github.com/RinsunaMahani/bao-ai/issues).
