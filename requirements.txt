@@ -1,0 +1,15 @@
+# Core — the app runs (offline retrieval + heuristic language detection,
+# no speech, no ML classifier) with just this installed.
+streamlit>=1.40.0
+google-genai>=0.1.1
+python-dotenv>=1.0.1
+# 1.6+ so the pan-African detector bundle (exported under 1.6.1) loads
+# without an InconsistentVersionWarning.
+scikit-learn>=1.6.0
+# Loads the optional pan-African detector bundle. Small, pure-Python,
+# and already a scikit-learn dependency — declared explicitly because
+# bao/services/language_detector.py imports it by name.
+joblib>=1.3.0
+pandas>=2.2.0
+numpy>=1.26.0
+psutil>=5.9.0

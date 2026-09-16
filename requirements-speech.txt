@@ -1,0 +1,12 @@
+-r requirements.txt
+SpeechRecognition>=3.10.0
+scipy>=1.13.0
+sounddevice>=0.4.6
+soundfile>=0.12.1
+--find-links https://download.pytorch.org/whl/cpu
+torch>=2.2.0
+transformers>=4.40.0
+
+# Real South African neural voices (en-ZA/af-ZA/zu-ZA). Online, but free
+# and keyless. Optional: without it everything falls back to offline MMS.
+edge-tts>=6.1.0

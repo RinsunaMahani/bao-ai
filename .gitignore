@@ -1,0 +1,34 @@
+# Environment / secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Large binaries downloaded at runtime (never committed)
+*.bin
+*.safetensors
+
+# NOTE: the model assets this app needs to run — *.tflite, *.keras,
+# tokenizer.pickle, tokenizer_config.json — are deliberately NOT ignored.
+# They are committed via Git LFS (see .gitattributes). Ignoring them here
+# would silently win over .gitattributes, and a fresh clone would start
+# with no language classifier at all.
+
+# Evaluation output
+eval/report.md
+
+# OS / editor cruft
+.DS_Store
+.vscode/
+.idea/

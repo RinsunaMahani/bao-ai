@@ -1,0 +1,738 @@
+"""Bao AI - Speech Service (Text-to-Speech / Speech-to-Text).
+
+TWO TTS BACKENDS, chosen per language, because no single one covers the
+brief:
+
+  - **edge-tts** (`_EDGE_VOICES`) — Microsoft's neural voices, free and
+    keyless, but ONLINE. It has genuine South African locales for exactly
+    three of the eleven: en-ZA, af-ZA, zu-ZA. This is the only backend
+    here that produces real South African *English*.
+  - **MMS-TTS** (`facebook/mms-tts-*`) — Meta's VITS models, fully
+    OFFLINE after a one-time download, and the only option that covers
+    the remaining eight languages at all.
+
+Why this split matters, and the trap it avoids: MMS has no en-ZA model.
+The tempting workaround is to route English text through the Afrikaans
+model (`"English" = "afr"`), which does change the accent — but it changes
+it by applying *Afrikaans* letter-to-sound rules to English words. "very"
+comes out closer to "ferry", "will" closer to "vill". That is an Afrikaans
+speaker mispronouncing English, not South African English. edge-tts
+`en-ZA-LukeNeural` is a real South African English voice, so when it's
+available it wins for English.
+
+The `"English" = "afr"` mapping is still in config.toml as the OFFLINE
+fallback, because when there's no network the choice is only between a
+neutral international-English voice and an Afrikaans-flavoured one, and
+this project would rather sound local. That's a taste call, and it's
+config, so it can be changed in one line.
+
+NOT VERIFIED IN CI: neither backend can be exercised in the test
+environment (no Hugging Face download, no Microsoft endpoint). The tests
+cover backend *selection* and text chunking — the parts that are pure
+logic. Actual audio quality has to be checked by ear on a real machine.
+"""
+from __future__ import annotations
+
+import asyncio
+import io
+import re
+import threading
+from collections.abc import Callable
+from dataclasses import dataclass
+
+import numpy as np
+import scipy.io.wavfile
+
+from pathlib import Path
+
+from bao.core.config import DEFAULT_MMS_CODES, DEFAULT_STT_CODES
+from bao.core.exceptions import SpeechError
+from bao.core.logging import get_logger
+
+try:
+    import speech_recognition as sr
+    _HAS_STT_BACKEND = True
+except ImportError:
+    sr = None  # type: ignore[assignment]
+    _HAS_STT_BACKEND = False
+
+try:
+    import torch
+    from transformers import AutoTokenizer, VitsModel
+    _HAS_MMS_BACKEND = True
+except Exception:  # pragma: no cover - torch/CUDA mismatches raise non-ImportError
+    torch = None  # type: ignore[assignment]
+    AutoTokenizer = None  # type: ignore[assignment]
+    VitsModel = None  # type: ignore[assignment]
+    _HAS_MMS_BACKEND = False
+
+try:
+    import edge_tts
+    _HAS_EDGE_BACKEND = True
+except ImportError:
+    edge_tts = None  # type: ignore[assignment]
+    _HAS_EDGE_BACKEND = False
+
+logger = get_logger(__name__)
+
+WAV_MIME = "audio/wav"
+MP3_MIME = "audio/mpeg"
+
+# The only three of South Africa's eleven official languages with a real
+# Microsoft neural locale. Voice IDs verified against the published
+# edge-tts voice list (2026-08-25) rather than assumed — a wrong ID fails
+# at request time with an unhelpful error.
+_EDGE_VOICES = {
+    "English": "en-ZA-LukeNeural",
+    "Afrikaans": "af-ZA-WillemNeural",
+    "isiZulu": "zu-ZA-ThembaNeural",
+}
+
+# VITS degrades on long inputs (attention alignment drifts and memory
+# grows with sequence length), so MMS input is chunked. Chunks longer than
+# this with no sentence terminator get split on whitespace as a backstop —
+# a 400-word bullet list with no full stop is a real thing an LLM returns.
+_MAX_CHUNK_CHARS = 220
+
+
+@dataclass(frozen=True)
+class SpeechAudio:
+    """Audio plus its MIME type. The type is carried rather than assumed
+    because the two backends return different containers: MMS produces raw
+    WAV, edge-tts produces MP3. Callers that hardcoded "audio/wav" played
+    silence for the edge backend.
+    """
+
+    data: bytes
+    mime: str
+
+
+def has_mms_backend() -> bool:
+    return _HAS_MMS_BACKEND
+
+
+def has_edge_backend() -> bool:
+    return _HAS_EDGE_BACKEND
+
+
+def has_tts_backend() -> bool:
+    """True if ANY speech synthesis is possible."""
+    return _HAS_MMS_BACKEND or _HAS_EDGE_BACKEND
+
+
+def has_stt_backend() -> bool:
+    return _HAS_STT_BACKEND
+
+
+# --- Voice coverage policy ------------------------------------------
+#
+# Four of the eleven have a real voice. What happens for the other seven is
+# a design decision, not an accident, so it is written down here.
+#
+# TIER 1  native voice            English, isiZulu, Afrikaans (edge-tts);
+#                                 Xitsonga (MMS, offline)
+# TIER 2  related-language voice  only where the substitution is defensible
+#                                 (see below). OFF by default.
+# TIER 3  speak in English        with the substitution disclosed to the user.
+#                                 OFF by default.
+# TIER 4  text only               the default, and never silent about it.
+#
+# Tier 2 is where care is needed. Substituting a voice means applying one
+# language's letter-to-sound rules to another's words, which produces
+# mispronunciation rather than an accent — this project already rejected
+# routing English through the Afrikaans model for exactly that reason.
+#
+# So only substitutions within the SAME closely-related family are offered,
+# and a proposed table was cut from seven rows to three after checking:
+#
+#   isiXhosa, siSwati, isiNdebele -> isiZulu   KEPT. All Nguni; they share
+#       orthography including the click letters c/q/x, so the isiZulu model
+#       has seen these characters.
+#
+#   Sesotho, Setswana, Sepedi -> each other    DROPPED. All three return 404
+#       on Hugging Face, so there is no voice anywhere in the Sotho-Tswana
+#       family to substitute.
+#
+#   Tshivenda -> Xitsonga                      DROPPED. Venda is its own
+#       branch of Bantu and Tsonga is Tswa-Ronga; they are not close. Venda
+#       orthography also uses dental diacritics (ṱ ḓ ṋ ḽ) absent from Tsonga,
+#       and a character-level VITS model mangles characters it never saw.
+#
+# Even the three kept substitutions are approximations. They are opt-in, and
+# the UI says which voice was actually used.
+# Locally trained VITS checkpoints, by language. These are voices this
+# project trained itself on NCHLT rather than pulled from Hugging Face,
+# and before this existed there was no way to load one: coverage only
+# consulted edge-tts and the pretrained MMS catalogue, so a language with
+# a trained voice sitting on disk still reported "text only".
+#
+# Paths come from config.toml ([speech.local_voices]) so a checkpoint can
+# be dropped in without a code change. A path that does not exist is
+# ignored rather than raising — the app must still start on a machine
+# that has not synced the model files.
+LOCAL_VOICE_MODELS: dict[str, str] = {}
+
+
+def load_local_voices(paths: dict[str, str] | None) -> dict[str, str]:
+    """Registers locally trained checkpoints, keeping only ones present on
+    disk. Returns what was actually registered.
+    """
+    LOCAL_VOICE_MODELS.clear()
+    for language, path in (paths or {}).items():
+        if path and Path(path).exists():
+            LOCAL_VOICE_MODELS[language] = path
+        elif path:
+            logger.warning(
+                f"Local voice for {language} configured at {path} but not found — "
+                f"{language} falls back to its next tier."
+            )
+    if LOCAL_VOICE_MODELS:
+        logger.info(f"Local voices registered: {sorted(LOCAL_VOICE_MODELS)}")
+    return dict(LOCAL_VOICE_MODELS)
+
+
+# Substitutions within a closely-related family, offered only where a
+# voice in that family actually exists. Nguni routes are static because
+# isiZulu always has an edge-tts voice; Sotho-Tswana routes are NOT,
+# because they depend on a locally trained checkpoint that may or may not
+# be installed — see related_language_voices().
+_NGUNI_ROUTES = {
+    "isiXhosa": "isiZulu",
+    "siSwati": "isiZulu",
+    "isiNdebele": "isiZulu",
+}
+
+# Sotho-Tswana. Previously dropped outright: all three 404 on Hugging
+# Face, so there was no voice in the family to substitute from. A locally
+# trained Sepedi checkpoint removes that blocker, and these two routes
+# become available — but ONLY while such a checkpoint is registered.
+#
+# The substitution is defensible within the family: the three are closely
+# related and share the Latin orthography a character-level model reads.
+# It is still an approximation, and orthographic conventions differ
+# (Sepedi's š has no Sesotho counterpart), so it stays opt-in and
+# disclosed like every other Tier 2 route.
+_SOTHO_TSWANA_ROUTES = {
+    "Sesotho": "Sepedi",
+    "Setswana": "Sepedi",
+}
+
+
+def related_language_voices() -> dict[str, str]:
+    """Tier 2 routes available right now.
+
+    Computed rather than constant because a route is only honest if the
+    target language can actually be spoken on this machine. Offering
+    "Sesotho, spoken with the Sepedi voice" when no Sepedi voice is
+    installed promises audio that never arrives.
+    """
+    routes = dict(_NGUNI_ROUTES)
+    if "Sepedi" in LOCAL_VOICE_MODELS:
+        routes.update(_SOTHO_TSWANA_ROUTES)
+    return routes
+
+
+# Retained as a module-level name for callers that import it directly.
+# Prefer related_language_voices(), which reflects installed checkpoints.
+RELATED_LANGUAGE_VOICES = _NGUNI_ROUTES
+
+
+def voice_coverage(mms_codes: dict[str, str] | None = None) -> dict[str, str]:
+    """Which tier each language currently falls into, for display.
+
+    Reports capability, not attempts: it does not download anything, so it
+    is safe to call on every render.
+    """
+    from bao.core.config import LABELS
+
+    coverage = {}
+    routes = related_language_voices()
+    for language in LABELS:
+        if language in LOCAL_VOICE_MODELS:
+            coverage[language] = "native (locally trained)"
+        elif _HAS_EDGE_BACKEND and language in _EDGE_VOICES:
+            coverage[language] = "native"
+        elif _HAS_MMS_BACKEND and (mms_codes or DEFAULT_MMS_CODES).get(language) in _KNOWN_MMS_VOICES:
+            coverage[language] = "native"
+        elif language in routes:
+            coverage[language] = f"related ({routes[language]})"
+        else:
+            coverage[language] = "text only"
+    return coverage
+
+
+# Verified against Hugging Face on 2026-08-30 with an authenticated request.
+# Everything else in DEFAULT_MMS_CODES returned 404. Listed explicitly so
+# coverage can be reported without a network call.
+_KNOWN_MMS_VOICES = {"tso", "eng"}
+
+
+def select_backend(target_language: str, preference: str = "auto") -> str | None:
+    """Decides which backend synthesizes this language. Returns "edge",
+    "mms", or None if neither can.
+
+    Split out as a pure function so the routing rules are testable without
+    a network call or a model download — the audio itself isn't testable
+    here, but "does English go to edge when edge is installed" is.
+
+    preference: "auto" prefers edge where a real SA voice exists and falls
+    back to MMS; "edge" and "mms" force one backend and return None rather
+    than silently using the other.
+    """
+    if preference == "mms":
+        return "mms" if _HAS_MMS_BACKEND else None
+
+    if preference == "edge":
+        return "edge" if (_HAS_EDGE_BACKEND and target_language in _EDGE_VOICES) else None
+
+    # "auto" — Tier 1 only. Tiers 2 and 3 are applied by the caller via
+    # resolve_voice_language(), because they change WHICH language is
+    # spoken, not which backend speaks it, and that has to be visible.
+    if _HAS_EDGE_BACKEND and target_language in _EDGE_VOICES:
+        return "edge"
+    if _HAS_MMS_BACKEND:
+        return "mms"
+    return None
+
+
+def resolve_voice_language(
+    target_language: str,
+    mms_codes: dict[str, str] | None = None,
+    allow_related: bool = False,
+    allow_english: bool = False,
+) -> tuple[str | None, str | None]:
+    """Decides which language will actually be SPOKEN, and why.
+
+    Returns (language_to_speak, note). `note` is None for a native voice and
+    a short user-facing sentence otherwise — the substitution is never
+    silent, because a listener who is told "spoken with the isiZulu voice"
+    can judge it, and one who isn't isn't just hears bad isiXhosa.
+
+    Returns (None, reason) when nothing suitable exists, which is Tier 4:
+    text only, stated plainly.
+    """
+    codes = mms_codes or DEFAULT_MMS_CODES
+
+    # Tier 1 — a real voice for this language.
+    if _HAS_EDGE_BACKEND and target_language in _EDGE_VOICES:
+        return target_language, None
+    if _HAS_MMS_BACKEND and codes.get(target_language) in _KNOWN_MMS_VOICES:
+        return target_language, None
+
+    # Tier 2 — a closely-related language, opt-in.
+    if allow_related and target_language in RELATED_LANGUAGE_VOICES:
+        related = RELATED_LANGUAGE_VOICES[target_language]
+        speakable, _ = resolve_voice_language(related, codes)
+        if speakable:
+            return speakable, (
+                f"No {target_language} voice exists yet — spoken with the "
+                f"{related} voice, which is closely related but not the same."
+            )
+
+    # Tier 3 — English, opt-in.
+    if allow_english and _HAS_EDGE_BACKEND and "English" in _EDGE_VOICES:
+        return "English", (
+            f"No {target_language} voice exists yet — the reply is spoken in English."
+        )
+
+    # Tier 4.
+    return None, f"No voice is available for {target_language}; showing text only."
+
+
+def _normalize_waveform(waveform: np.ndarray) -> np.ndarray:
+    if waveform.dtype.kind == "f":
+        waveform = np.clip(waveform, -1.0, 1.0)
+        waveform = (waveform * 32767).astype(np.int16)
+    elif waveform.dtype.kind in {"u", "i"}:
+        waveform = waveform.astype(np.int16)
+    return waveform
+
+
+def clean_text_for_speech(text: str) -> str:
+    """Strips markdown that would otherwise be read aloud as punctuation
+    noise ("star star Cloud star star").
+
+    Deliberately does NOT strip the apostrophe: it is a letter-level part
+    of the orthography in several of these languages (Xitsonga
+    "ematshan'weni", isiZulu "wam'"), and removing it changes the word
+    rather than tidying it.
+    """
+    # Ordered longest-first so "**" is removed before "*" leaves a stray.
+    for token in ("**", "__", "```", "*", "_", "#", "[", "]", "(", ")", "`",
+                  '"', "|", ">", "~~"):
+        text = text.replace(token, "")
+
+    # Bare list bullets read as "dash" or "bullet" in some voices.
+    text = re.sub(r"^\s*[-\u2022\u2013]\s+", "", text, flags=re.MULTILINE)
+    # A colon introduces a list far more often than it ends a clause here;
+    # turning it into a sentence break stops the synthesizer running the
+    # heading into the first item.
+    text = re.sub(r":\s*", ". ", text)
+    return text.strip()
+
+
+def split_into_sentences(text: str) -> list[str]:
+    """Splits text into synthesis-sized chunks, keeping terminal
+    punctuation.
+
+    Punctuation is kept because both backends use it for prosody — a
+    stripped chunk is read as a flat statement, so a whole paragraph comes
+    out monotone. (The earlier version split on `[.\\n!?]+` and discarded
+    the match, which is where that flatness came from.)
+    """
+    cleaned = clean_text_for_speech(text)
+    if not cleaned:
+        return []
+
+    # Keep the terminator with the sentence it ends.
+    raw_chunks = re.split(r"(?<=[.!?])\s+|\n+", cleaned)
+
+    sentences: list[str] = []
+    for chunk in raw_chunks:
+        collapsed = " ".join(chunk.split()).strip()
+        if len(collapsed) <= 1:
+            continue
+        sentences.extend(_split_long_chunk(collapsed))
+    return sentences
+
+
+def _split_long_chunk(chunk: str) -> list[str]:
+    """Backstop for text with no sentence terminators at all. Splits on
+    word boundaries so a word is never cut in half.
+    """
+    if len(chunk) <= _MAX_CHUNK_CHARS:
+        return [chunk]
+
+    pieces: list[str] = []
+    current = ""
+    for word in chunk.split():
+        candidate = f"{current} {word}".strip()
+        if len(candidate) > _MAX_CHUNK_CHARS and current:
+            pieces.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        pieces.append(current)
+    return pieces
+
+
+# --- MMS (offline) -----------------------------------------------------
+
+
+# Successful loads AND failures are both remembered. `functools.cache` only
+# caches successful returns — a raising call is never stored, so a language
+# whose model can't be fetched re-attempted the download on EVERY message.
+# That turned one broken voice into a permanent per-turn network stall plus
+# a repeating traceback in the log, which is why "voice doesn't work" and
+# "messages are slow" were the same bug.
+_TTS_MODELS: dict[str, tuple] = {}
+_TTS_FAILURES: dict[str, str] = {}
+
+
+def load_tts_model(mms_code: str):
+    """Loads (and memoizes) an MMS voice. Raises on failure, but only the
+    first attempt actually tries — subsequent calls re-raise the recorded
+    reason immediately.
+    """
+    if mms_code in _TTS_MODELS:
+        return _TTS_MODELS[mms_code]
+    if mms_code in _TTS_FAILURES:
+        raise SpeechError(_TTS_FAILURES[mms_code])
+
+    if not _HAS_MMS_BACKEND:
+        raise ImportError("torch and transformers are required for MMS speech synthesis.")
+
+    model_name = f"facebook/mms-tts-{mms_code}"
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = VitsModel.from_pretrained(model_name)
+        model.eval()
+    except Exception as e:
+        # Remembered so it is attempted once per process, not once per turn.
+        _TTS_FAILURES[mms_code] = f"{model_name} could not be loaded: {e}"
+        raise
+
+    _TTS_MODELS[mms_code] = (tokenizer, model)
+    logger.info(f"Loaded MMS-TTS model for language code '{mms_code}'")
+    return tokenizer, model
+
+
+def reset_tts_cache() -> None:
+    """Clears both caches, including remembered failures — so a language
+    that failed because the network was down can be retried after it comes
+    back, without restarting the app.
+    """
+    _TTS_MODELS.clear()
+    _TTS_FAILURES.clear()
+
+
+def tts_availability() -> dict[str, str]:
+    """What this process currently knows: "loaded", or the failure reason.
+    Drives the honest sidebar caption instead of claiming every language
+    has a voice.
+    """
+    status = {code: "loaded" for code in _TTS_MODELS}
+    status.update(_TTS_FAILURES)
+    return status
+
+
+def _synthesize_mms(
+    sentences: list[str],
+    mms_code: str,
+    speaking_rate: float | None,
+    noise_scale: float | None,
+) -> SpeechAudio | None:
+    tokenizer, model = load_tts_model(mms_code)
+
+    # VitsModel.forward reads these off the instance, so setting them here
+    # is the supported way to control pacing. speaking_rate < 1.0 is
+    # SLOWER (transformers uses length_scale = 1 / speaking_rate).
+    if speaking_rate is not None:
+        model.speaking_rate = speaking_rate
+    if noise_scale is not None:
+        model.noise_scale = noise_scale
+
+    waveforms: list[np.ndarray] = []
+    # Built once rather than per sentence — it never varies within a call.
+    silence_gap = np.zeros(int(model.config.sampling_rate * 0.25), dtype=np.int16)
+
+    for sentence in sentences:
+        inputs = tokenizer(sentence.lower(), return_tensors="pt")
+        if inputs.input_ids.shape[-1] == 0:
+            continue
+        # inference_mode is strictly faster than no_grad: it also skips
+        # version-counter bookkeeping on the tensors. Safe here because
+        # nothing downstream ever backpropagates through this output.
+        with torch.inference_mode():
+            output = model(**inputs).waveform
+        waveforms.append(_normalize_waveform(output.squeeze().cpu().numpy()))
+        waveforms.append(silence_gap)
+
+    if not waveforms:
+        return None
+
+    buffer = io.BytesIO()
+    scipy.io.wavfile.write(buffer, rate=model.config.sampling_rate, data=np.concatenate(waveforms))
+    buffer.seek(0)
+    return SpeechAudio(data=buffer.read(), mime=WAV_MIME)
+
+
+# --- edge-tts (online, real SA voices) ---------------------------------
+
+
+def _rate_percent(speaking_rate: float | None) -> str:
+    """Converts the MMS-style multiplier in config.toml into the
+    percentage string edge-tts expects, so one config knob drives both
+    backends instead of two that can drift apart.
+    """
+    if speaking_rate is None:
+        return "+0%"
+    delta = round((speaking_rate - 1.0) * 100)
+    return f"{delta:+d}%"
+
+
+def _run_coroutine_blocking(make_coroutine):
+    """Runs an async call from sync code, on its own loop in its own
+    thread.
+
+    Streamlit reruns scripts inside worker threads and other callers may
+    already be inside a loop, so a bare `asyncio.run()` here raises
+    "cannot be called from a running event loop" in some contexts and
+    works in others. Owning the loop removes that whole class of
+    environment-dependent failure.
+    """
+    box: dict = {}
+
+    def runner() -> None:
+        try:
+            box["value"] = asyncio.run(make_coroutine())
+        except Exception as e:  # re-raised on the calling thread below
+            box["error"] = e
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join()
+
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+def _synthesize_edge(text: str, voice: str, speaking_rate: float | None) -> SpeechAudio | None:
+    rate = _rate_percent(speaking_rate)
+
+    async def stream() -> bytes:
+        communicate = edge_tts.Communicate(text, voice, rate=rate)
+        audio = bytearray()
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio.extend(chunk["data"])
+        return bytes(audio)
+
+    data = _run_coroutine_blocking(stream)
+    if not data:
+        return None
+    logger.info(f"Synthesized speech with edge-tts voice '{voice}' (rate {rate}).")
+    return SpeechAudio(data=data, mime=MP3_MIME)
+
+
+# --- Public entry point ------------------------------------------------
+
+
+def synthesize_speech(
+    text: str,
+    target_language: str = "English",
+    mms_codes: dict[str, str] | None = None,
+    speaking_rate: float | None = None,
+    noise_scale: float | None = None,
+    backend: str = "auto",
+    on_error: Callable[[str], None] | None = None,
+) -> SpeechAudio | None:
+    """Synthesizes `text` in `target_language`. Returns None rather than
+    raising: speech is an enhancement, and a failed voice must never take
+    down a turn that has a perfectly good text answer.
+
+    `on_error` receives a short human-readable reason when synthesis
+    fails. Without it a failure was invisible — no audio player appeared
+    and nothing said why, so "some languages have no voice" was
+    indistinguishable from "the model is still downloading", "that voice
+    code doesn't exist", and "there's no network". Each MMS language is a
+    separate ~145 MB download on first use, so the first request in a new
+    language routinely looks like a broken feature when it is really a
+    download in progress or a failed one.
+    """
+    if not text.strip():
+        return None
+
+    chosen = select_backend(target_language, backend)
+    if chosen is None:
+        reason = (
+            f"No speech backend available for {target_language}. "
+            "Install requirements-speech.txt for offline MMS voices."
+        )
+        logger.info(reason)
+        if on_error:
+            on_error(reason)
+        return None
+
+    try:
+        if chosen == "edge":
+            # Clean first. This was missing: only the MMS branch cleaned its
+            # input (via split_into_sentences), so edge-tts received raw
+            # markdown and read it aloud — a reply containing
+            # "**Differential Calculus**" was spoken with the asterisks.
+            #
+            # No sentence splitting here: edge-tts handles long text server
+            # side, and it is the punctuation-aware chunking that MMS needs
+            # for its own reasons, not a cleaning step.
+            spoken = clean_text_for_speech(text)
+            if not spoken:
+                return None
+            return _synthesize_edge(spoken, _EDGE_VOICES[target_language], speaking_rate)
+
+        codes = mms_codes or DEFAULT_MMS_CODES
+        mms_code = codes.get(target_language, "eng")
+        sentences = split_into_sentences(text)
+        if not sentences:
+            return None
+        return _synthesize_mms(sentences, mms_code, speaking_rate, noise_scale)
+    except Exception as e:
+        # Deliberately a one-line warning, not logger.exception: the
+        # common cause is "edge-tts is online and there's no network,"
+        # which is an expected condition on this project's target
+        # deployments. A full traceback per turn would bury the actual
+        # conversation in the console during a live demo.
+        logger.warning(f"Speech synthesis failed via '{chosen}' for {target_language}: {e}")
+
+        # An edge failure is usually the network; MMS is the offline path,
+        # so it's worth one retry there before giving up entirely.
+        if chosen == "edge" and _HAS_MMS_BACKEND:
+            logger.info("Retrying synthesis on the offline MMS backend.")
+            return synthesize_speech(
+                text, target_language, mms_codes, speaking_rate, noise_scale,
+                backend="mms", on_error=on_error,
+            )
+
+        if on_error:
+            on_error(_explain_failure(chosen, target_language, mms_codes, e))
+        return None
+
+
+def _explain_failure(chosen: str, target_language: str, mms_codes: dict | None, error: Exception) -> str:
+    """Turns an exception into something worth showing a user.
+
+    The raw message is usually a stack-trace fragment or an HTTP status,
+    which tells a presenter nothing. The three real causes are worth
+    naming explicitly, because they have different fixes.
+    """
+    detail = str(error).strip() or type(error).__name__
+
+    if chosen == "edge":
+        return f"Online voice for {target_language} failed (network?): {detail[:120]}"
+
+    code = (mms_codes or DEFAULT_MMS_CODES).get(target_language, "eng")
+    lowered = detail.lower()
+
+    # transformers reports EVERY hub failure with the same sentence — "is not
+    # a local folder and is not a valid model identifier" — regardless of
+    # whether the repo is absent, gated, or the request was simply refused.
+    # An earlier version of this function read that sentence as proof of
+    # absence and told users the model "is not a published model", which was
+    # wrong: a live probe showed nine repos returning HTTP 401 (refused)
+    # while a tenth returned 200 and loaded fine. 401 is not 404.
+    #
+    # So the status code is checked first, and only a genuine 404 is reported
+    # as absence. Anything else is reported as what it is: a refused request,
+    # which authentication usually fixes.
+    if "401" in detail or "unauthorized" in lowered or "gated" in lowered:
+        return (
+            f"Hugging Face refused the request for facebook/mms-tts-{code} (401). "
+            "That is an authentication problem, not a missing model — set a "
+            "HF_TOKEN environment variable (free token from "
+            "huggingface.co/settings/tokens) and try again."
+        )
+    if "429" in detail or "rate limit" in lowered:
+        return (
+            f"Rate-limited while fetching facebook/mms-tts-{code}. Set a HF_TOKEN "
+            "for higher limits, or wait and retry."
+        )
+    if "404" in detail or "repositorynotfound" in lowered:
+        return (
+            f"No offline voice for {target_language}: facebook/mms-tts-{code} "
+            "returned 404. MMS covers ~1100 languages but not every one."
+        )
+    if "not a valid model identifier" in lowered or "is not a local folder" in lowered:
+        # Ambiguous by construction — say so rather than guessing.
+        return (
+            f"facebook/mms-tts-{code} could not be fetched. transformers reports "
+            "absent, gated and refused requests identically, so this may be "
+            "authentication rather than a missing model — try setting HF_TOKEN."
+        )
+    if any(k in lowered for k in ("connection", "timeout", "resolve", "network", "ssl")):
+        return (
+            f"Could not download the {target_language} voice (facebook/mms-tts-{code}, "
+            "~145 MB on first use). Check the network, then retry."
+        )
+    return f"Voice for {target_language} (mms-tts-{code}) failed: {detail[:120]}"
+
+
+def transcribe_audio_bytes(
+    audio_bytes: bytes, target_language: str = "English", stt_codes: dict | None = None
+) -> str:
+    if not _HAS_STT_BACKEND:
+        raise SpeechError("Speech-to-text is unavailable (SpeechRecognition not installed).")
+
+    codes = stt_codes or DEFAULT_STT_CODES
+    language_code = codes.get(target_language, "en-ZA")
+
+    recognizer = sr.Recognizer()
+    try:
+        with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
+            audio = recognizer.record(source)
+        return recognizer.recognize_google(audio, language=language_code)
+    except sr.UnknownValueError as e:
+        raise SpeechError("Could not understand the audio.") from e
+    except Exception as e:
+        logger.exception("Speech transcription failed")
+        raise SpeechError(str(e)) from e

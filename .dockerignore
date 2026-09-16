@@ -1,0 +1,48 @@
+# Secrets — critical. The Dockerfile does `COPY . /app`, so without this
+# line the .env file (containing GEMINI_API_KEY) is baked into an image
+# layer and recoverable by anyone who pulls the image, even if it's later
+# deleted in a subsequent layer. docker-compose passes the key in at run
+# time via `env_file`, which is the correct mechanism.
+.env
+.env.*
+!.env.example
+
+# Version control
+.git/
+.gitignore
+.gitattributes
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+
+# Virtual environments — never copy a host venv into a Linux image
+.venv/
+venv/
+
+# Editor / OS cruft
+.vscode/
+.idea/
+.DS_Store
+
+# Not needed at runtime; excluded to keep the image small and the build fast
+docs/
+eval/report.md
+benchmark_results.json
+
+# Training-only artifacts — verified unused at runtime, ~72 MB of the image.
+# The app loads models/language_classifier.tflite and tokenizer_config.json.
+# It never loads these two: no caller passes `fallback_keras_path` to
+# get_language_detector(), and tokenizer.pickle is referenced nowhere in
+# the codebase at all. The .keras file is input to convert_model.py, which
+# is a one-off conversion step, not part of serving.
+# They stay in the repo (tracked via Git LFS) — they just don't belong in
+# a deployment image.
+ultimate_african_ai.keras
+tokenizer.pickle

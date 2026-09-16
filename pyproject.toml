@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bao-ai"
+version = "0.1.0"
+description = "Multilingual South African AI assistant with offline RAG and voice support."
+readme = "README.md"
+requires-python = ">=3.10"
+# Core dependencies: the app runs (offline knowledge retrieval + heuristic
+# language detection, no speech, no ML classifier) with just these.
+dependencies = [
+    "streamlit>=1.40.0",
+    "google-genai>=0.1.1",
+    "python-dotenv>=1.0.1",
+    "scikit-learn>=1.4.0",
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "psutil>=5.9.0",
+]
+
+# Everything below is optional and guarded by try/except in the modules
+# that use it (services/speech.py, services/language_detector.py,
+# knowledge/loader.py) — a missing extra degrades one feature, it never
+# crashes the app. Previously the pyproject declared `ai-edge-litert` for
+# the TFLite classifier, but the actual code has always imported
+# `tensorflow` directly (`tf.lite.Interpreter`) — the declared dependency
+# didn't match the real import. `ml` now lists what's actually used.
+[project.optional-dependencies]
+speech = ["SpeechRecognition>=3.10.0", "scipy>=1.13.0", "pyttsx3>=2.90", "torch>=2.2.0", "transformers>=4.40.0"]
+ml = ["tensorflow>=2.15.0"]
+pdf = ["pypdf>=4.0.0"]
+dev = ["pytest>=8.0.0", "ruff>=0.6.0", "huggingface-hub>=0.18.0"]
+
+[tool.setuptools.packages]
+find = {}
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

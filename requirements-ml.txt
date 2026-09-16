@@ -1,0 +1,19 @@
+# Optional: enables services/language_detector.py's TFLiteLanguageDetector.
+# The default HeuristicLanguageDetector needs none of this — this is an
+# opt-in accuracy upgrade, not a requirement to run the app.
+#
+# ai-edge-litert is Google's standalone LiteRT runtime. It provides the only
+# thing the classifier needs (a TFLite interpreter) at a fraction of the
+# size of full TensorFlow, and it is packaged for newer Python versions.
+#
+# This matters concretely: TensorFlow publishes no wheels for Python 3.14,
+# so `pip install tensorflow` there fails with "No matching distribution
+# found" and the ML classifier silently never runs while the app keeps
+# working on the keyword fallback.
+-r requirements.txt
+ai-edge-litert>=1.0.0
+
+# Full TensorFlow is NOT required. Install it only if you also need to run
+# convert_model.py (Keras -> TFLite) or tests/test_tokenizer_parity.py,
+# both of which need Keras itself. Requires Python <= 3.13.
+#   pip install "tensorflow>=2.15.0"

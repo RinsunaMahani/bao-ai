@@ -1,0 +1,32 @@
+{
+  "timestamp": "2026-08-08 17:23:34",
+  "gemini_online": false,
+  "language_detection_accuracy": {
+    "unique_cases": 5,
+    "unique_correct": 4,
+    "total_inference_runs": 25,
+    "iterations_per_query": 5,
+    "note": "unique_correct/unique_cases is the accuracy figure; total_inference_runs is for latency only"
+  },
+  "detector_comparison": {
+    "heuristic": {
+      "correct": 8,
+      "total": 10
+    }
+  },
+  "memory": {
+    "baseline_mb": 308.04296875,
+    "final_mb": 308.06640625,
+    "peak_traced_mb": 0.055861473083496094
+  },
+  "latencies_ms": {
+    "pipeline": {
+      "mean": 2.7820225999994364,
+      "p95": 3.4037120000078858
+    },
+    "language_detection": {
+      "mean": 0.5192264799995883,
+      "p95": 0.6817219999959434
+    }
+  }
+}

@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  bao-app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: bao-ai
+    ports:
+      - "8501:8501"
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - ../.env
+    volumes:
+      # Mount workspace subfolders for real-time development without rebuilding
+      - ../models:/app/models
+      - ../data:/app/data
+      - ../bao:/app/bao
+    restart: unless-stopped

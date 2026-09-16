@@ -1,0 +1,81 @@
+# Bao AI Assistant Configuration
+
+[model]
+gemini_model = "gemini-3.6-flash"
+# Pan-African classifier (14 languages, disjoint from the 11 SA ones).
+# OFF by default: turning it on changes the detection path for EVERY
+# message, not just the new languages. Enable it, run
+#   python scripts/gates.py
+# and check the 11 SA languages still detect correctly before demoing.
+enable_pan_african = false
+# Detection below this confidence is shown to the user but NOT used to
+# choose the reply language — the app answers in English instead.
+# A weak guess otherwise produces an answer in the wrong language, not
+# merely a wrong badge. Measured live: correct at 64%+, wrong at 35-42%.
+min_detection_confidence = 0.5
+
+[retrieval]
+default_similarity_threshold = 0.25
+# A high similarity score can still be answering a DIFFERENT question:
+# words the knowledge base has never seen are silently dropped before
+# scoring. This is the minimum share of the question (IDF-weighted)
+# the KB must actually be able to represent. Measured on the 70-query
+# labelled set: 0.70 cuts false positives from 22 to 4. Lower it for
+# more KB coverage at the cost of more confidently-wrong answers.
+min_query_coverage = 0.7
+
+[application]
+max_query_length = 500
+
+[languages]
+# OFFLINE fallback voices (Meta MMS). Verified against Hugging Face on
+# 2026-08-30 with an authenticated request: only mms-tts-tso (Xitsonga)
+# and mms-tts-eng resolve. xho, sot, tsn, nso, ven, ssw, nbl and afr all
+# return 404 — MMS covers 1107 languages but not these.
+#
+# "English" was previously mapped to "afr" to give it a local accent.
+# That repo does not exist, so the mapping silently removed English from
+# the offline path too. It now points at "eng", which works.
+#
+# Online, edge-tts serves English, Afrikaans and isiZulu with real
+# en-ZA/af-ZA/zu-ZA voices and bypasses this table entirely.
+mms_codes = { "Afrikaans" = "afr", "English" = "eng", "isiNdebele" = "nbl", "isiXhosa" = "xho", "isiZulu" = "zul", "Sepedi" = "nso", "Sesotho" = "sot", "Setswana" = "tsn", "siSwati" = "ssw", "Tshivenda" = "ven", "Xitsonga" = "tso" }
+
+stt_codes = { "Afrikaans" = "af-ZA", "English" = "en-ZA", "isiNdebele" = "nr-ZA", "isiXhosa" = "xh-ZA", "isiZulu" = "zu-ZA", "Sepedi" = "nso-ZA", "Sesotho" = "st-ZA", "Setswana" = "tn-ZA", "siSwati" = "ss-ZA", "Tshivenda" = "ve-ZA", "Xitsonga" = "ts-ZA" }
+
+[speech]
+# "auto" = real SA neural voices (edge-tts) for English/Afrikaans/isiZulu
+#          when installed and online; offline MMS for the other eight.
+# "mms"  = always offline MMS. "edge" = edge only (silent for the other 8).
+backend = "auto"
+# Voice coverage fallbacks, both OFF by default.
+#   fallback_related_voice: speak isiXhosa/siSwati/isiNdebele with the
+#     isiZulu voice. All Nguni, so the model has seen the orthography
+#     Also enables Sesotho/Setswana with the Sepedi voice, but ONLY
+#     when a Sepedi checkpoint is registered under [speech.local_voices]
+#     below — no Sotho-Tswana voice ships on Hugging Face.
+#     including the click letters — but it is still an approximation.
+#     There is deliberately NO equivalent for Sesotho/Setswana/Sepedi
+#     (no voice exists anywhere in that family) or Tshivenda (Venda is
+#     not close to Tsonga and uses diacritics Tsonga lacks).
+#   fallback_english_voice: speak the reply in English instead.
+# Either way the interface states which voice was used. A substitution
+# the listener is told about is a fallback; one they are not told about
+# is a misrepresentation.
+fallback_related_voice = false
+fallback_english_voice = false
+speaking_rate = 0.85   # Pacing control (< 1.0 is SLOWER; applies to both backends)
+noise_scale = 0.35      # Prosody variance, MMS only (< 0.667 removes robotic pitch jitter)
+
+[speech.local_voices]
+# VITS checkpoints this project trained itself, by language. Point each
+# at a directory containing the model; a path that does not exist is
+# ignored with a warning so the app still starts without the files.
+#
+# Registering Sepedi here does two things: Sepedi becomes a native
+# voice, and it unlocks the Sesotho/Setswana Tier 2 routes, which are
+# unavailable otherwise because the whole Sotho-Tswana family 404s on
+# Hugging Face.
+# Sepedi = "models/voices/sepedi_vits"
+# isiZulu = "models/voices/isizulu_vits"
+# Xitsonga = "models/voices/xitsonga_vits"

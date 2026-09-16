@@ -1,0 +1,13 @@
+# Optional: enables bao/knowledge/embeddings.py's SentenceEmbeddings, the
+# semantic-retrieval alternative to the default TF-IDF backend. Needed only
+# to run `python compare_retrievers.py`.
+#
+# Downloads ~470 MB of model weights on first use.
+#
+# WARNING: sentence-transformers pulls in torch, which can collide with an
+# existing TensorFlow install at the native-library level (observed as a
+# hard segfault with both present). If the TFLite language detector stops
+# working after installing this, that collision is the first thing to
+# check — consider a separate virtualenv for the retrieval experiment.
+-r requirements.txt
+sentence-transformers>=3.0.0

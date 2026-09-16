@@ -1,0 +1,71 @@
+query,expected_row,category,notes
+what is the capital of south africa,25,exact,verbatim KB question
+how many official languages does south africa have,26,exact,verbatim KB question
+what is the currency of south africa,27,exact,verbatim KB question
+how many provinces does south africa have,28,exact,verbatim KB question
+where is the library,5,exact,verbatim KB question
+what are the clinic hours,8,exact,verbatim KB question
+campus security number,12,exact,verbatim KB question
+load shedding schedule,9,exact,verbatim KB question
+how do i apply for a sassa grant,15,exact,verbatim KB question
+police emergency number,20,exact,verbatim KB question
+report a crime anonymously,22,exact,verbatim KB question
+how do i apply for nsfas funding student loan,29,exact,verbatim KB question
+where can i fix my laptop,10,exact,verbatim KB question
+report child abuse,24,exact,verbatim KB question
+how do i check my student account balance,11,exact,verbatim KB question
+which cities serve as south africa's capitals,25,paraphrase,reworded capital question
+how many languages are officially recognised here,26,paraphrase,reworded languages question
+what money does south africa use,27,paraphrase,reworded currency question
+how many provinces are there in the country,28,paraphrase,reworded provinces question
+where can i find the campus library,5,paraphrase,reworded library question
+what time does the clinic open,8,paraphrase,reworded clinic question
+who do i call for campus safety,12,paraphrase,reworded security question
+when will the power go out today,9,paraphrase,reworded load shedding question
+how can i get social grant support,15,paraphrase,reworded sassa question
+what number do i dial for the police,20,paraphrase,reworded police question
+i want to report a crime without giving my name,22,paraphrase,reworded anonymous crime question
+how do i get funding to study,29,paraphrase,reworded nsfas question
+my laptop is broken where do i take it,10,paraphrase,reworded laptop repair question
+i need to report someone hurting a child,24,paraphrase,reworded child abuse question
+how much money is in my student account,11,paraphrase,reworded balance question
+what is the capital of japan,-1,negative,geography outside SA scope
+who won the 2018 fifa world cup,-1,negative,sports trivia
+how does photosynthesis work,-1,negative,science question
+what is the airspeed velocity of an unladen swallow,-1,negative,known false-positive case
+what is the population of brazil,-1,negative,foreign demographics
+how do i bake sourdough bread,-1,negative,cooking
+what is the distance to the moon,-1,negative,astronomy
+who wrote romeo and juliet,-1,negative,literature
+what is the boiling point of water,-1,negative,physics
+how do i change a car tyre,-1,negative,automotive
+what causes a solar eclipse,-1,negative,astronomy
+what is the tallest mountain in the world,-1,negative,foreign geography
+how do i learn to play guitar,-1,negative,hobby
+what is the speed of light,-1,negative,physics
+who is the president of france,-1,negative,foreign politics
+what are the rules of cricket,-1,negative,sports
+how do i train for a marathon,-1,negative,fitness
+what is machine learning,-1,negative,tech concept outside KB
+where can i buy a bicycle in tokyo,-1,negative,foreign commerce
+what is the history of the roman empire,-1,negative,foreign history
+what is the capital of australia,-1,negative,lexical trap shares "capital"
+which country has the most official languages in europe,-1,negative,lexical trap shares "official languages"
+what currency does nigeria use,-1,negative,lexical trap shares "currency"
+how many provinces does canada have,-1,negative,lexical trap shares "provinces"
+where is the national library of france,-1,negative,lexical trap shares "library"
+what are the opening hours of the british museum,-1,negative,lexical trap shares "hours"
+what is the emergency number in the united kingdom,-1,negative,lexical trap shares "emergency number"
+how do i apply for a us social security number,-1,negative,lexical trap shares "apply" and "number"
+how do i report a crime in australia,-1,negative,lexical trap shares "report a crime"
+what is the student loan system in the united states,-1,negative,lexical trap shares "student loan"
+who is the current president of south africa,-1,negative,SA-related but not in KB
+what is the population of south africa,-1,negative,SA-related but not in KB
+when did south africa become a democracy,-1,negative,SA-related but not in KB
+what is the national anthem of south africa,-1,negative,SA-related but not in KB
+which south african city has the largest port,-1,negative,SA-related but not in KB
+what is the tallest building in johannesburg,-1,negative,SA-related but not in KB
+how do i get a south african drivers licence,-1,negative,SA gov service not in KB
+what are the public holidays in south africa,-1,negative,SA-related but not in KB
+how do i register a company in south africa,-1,negative,SA gov service not in KB
+what is the minimum wage in south africa,-1,negative,SA-related but not in KB
