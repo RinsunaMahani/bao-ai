@@ -11,7 +11,7 @@ import streamlit as st
 
 from bao.ai.orchestrator import Orchestrator
 from bao.bootstrap import build_orchestrator
-from bao.core.config import ASSISTANT_LOGO_PATH, Settings
+from bao.core.config import ASSISTANT_LOGO_PATH, LABELS, PAN_AFRICAN_LABELS, Settings
 from bao.knowledge.loader import extract_text_from_bytes, has_pdf_support
 from bao.services.language_detector import CompositeLanguageDetector
 from bao.services.speech import (
@@ -106,11 +106,13 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
                 ),
             )
             detector.enabled = enabled
+            pan_african_live = enabled
             if enabled:
                 st.caption("25 languages detected · 11 with curated answers")
             else:
                 st.caption("11 South African languages")
         else:
+            pan_african_live = False
             st.caption("11 South African languages")
             st.caption(
                 "The 14-language model is not loaded — see "
@@ -159,7 +161,12 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
         else:
             st.info("Not installed — install `requirements-speech.txt` for spoken replies.")
 
-        coverage = voice_coverage(settings.mms_codes)
+        # The twelve pan-African voices are only reachable when their
+        # languages can be detected, so they are reported only when that
+        # detector is on — otherwise the panel would list voices for
+        # languages the app will never identify.
+        covered_languages = LABELS + PAN_AFRICAN_LABELS if pan_african_live else LABELS
+        coverage = voice_coverage(settings.mms_codes, languages=covered_languages)
         # startswith, not equality: a locally trained checkpoint reports as
         # "native (locally trained)", which is the BEST tier, not an
         # approximation. Exact matching excluded it from the count and gave
@@ -175,10 +182,13 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
                 else:
                     icon = "🟡"
                 st.caption(f"{icon} **{language}** — {tier}")
-            st.caption(
-                "Seven of the eleven have no open text-to-speech model. "
-                "Fallbacks are configurable in config.toml and off by default."
-            )
+            silent = [lang for lang, tier in coverage.items() if tier == "text only"]
+            if silent:
+                st.caption(
+                    f"{len(silent)} of {len(coverage)} have no open text-to-speech "
+                    "model. Fallbacks are configurable in config.toml and off by "
+                    "default."
+                )
 
         if loaded:
             st.caption(f"Voices loaded this session: {len(loaded)}")

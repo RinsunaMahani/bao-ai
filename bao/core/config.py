@@ -41,6 +41,32 @@ DEFAULT_MMS_CODES = {
     "isiZulu": "zul", "Sepedi": "nso", "Sesotho": "sot", "Setswana": "tsn",
     "siSwati": "ssw", "Tshivenda": "ven", "Xitsonga": "tso",
 }
+# The 14 pan-African languages the optional sklearn detector adds. Kept
+# separate from LABELS, which is the eleven South African languages this
+# app is built around and which the knowledge base is written in.
+PAN_AFRICAN_LABELS = [
+    "Amharic", "French", "Hausa", "Igbo", "Lingala", "Luganda", "Oromo",
+    "Nigerian Pidgin", "Kirundi", "Shona", "Somali", "Swahili", "Tigrinya", "Yoruba",
+]
+
+# Offline MMS voices for those languages. Every code here was probed
+# against Hugging Face on 2026-09-18 with an authenticated request and
+# returned 200 — the same standard the South African table is held to,
+# because an unverified code fails at synthesis time with an error that
+# reads like a bug rather than a missing voice.
+#
+# Igbo and Lingala are absent on purpose: mms-tts-ibo and mms-tts-lin both
+# 404, as do the alternative codes tried (ibb, ibo_Latn, ln, lingala). They
+# are detected and answered in text, and honestly report no voice.
+#
+# Oromo is "orm", not the "gaz" its ISO 639-3 macrolanguage member would
+# suggest — gaz 404s and orm resolves. Probed, not assumed.
+DEFAULT_PAN_AFRICAN_MMS_CODES = {
+    "Amharic": "amh", "French": "fra", "Hausa": "hau", "Luganda": "lug",
+    "Oromo": "orm", "Nigerian Pidgin": "pcm", "Kirundi": "run", "Shona": "sna",
+    "Somali": "som", "Swahili": "swh", "Tigrinya": "tir", "Yoruba": "yor",
+}
+
 DEFAULT_STT_CODES = {
     "Afrikaans": "af-ZA", "English": "en-ZA", "isiNdebele": "nr-ZA", "isiXhosa": "xh-ZA",
     "isiZulu": "zu-ZA", "Sepedi": "nso-ZA", "Sesotho": "st-ZA", "Setswana": "tn-ZA",
@@ -101,7 +127,18 @@ class Settings:
 
     @property
     def mms_codes(self) -> dict:
-        return self._raw.get("languages", {}).get("mms_codes", DEFAULT_MMS_CODES)
+        """Voice codes for every language the app can detect, South African
+        and pan-African, with config.toml taking precedence.
+
+        MERGED rather than replaced. config.toml's table lists the eleven
+        South African languages and nothing else, so a plain `.get(...,
+        DEFAULT)` meant the twelve pan-African voices were invisible the
+        moment that file existed — which is always. Merging also means an
+        existing config.toml gains them without being edited, and an
+        explicit entry still wins over the default it shadows.
+        """
+        configured = self._raw.get("languages", {}).get("mms_codes", {})
+        return {**DEFAULT_MMS_CODES, **DEFAULT_PAN_AFRICAN_MMS_CODES, **configured}
 
     @property
     def stt_codes(self) -> dict:

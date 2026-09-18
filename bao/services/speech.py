@@ -82,9 +82,22 @@ MP3_MIME = "audio/mpeg"
 # edge-tts voice list (2026-08-25) rather than assumed — a wrong ID fails
 # at request time with an unhelpful error.
 _EDGE_VOICES = {
+    # South African locales — the only three of the eleven Microsoft has.
     "English": "en-ZA-LukeNeural",
     "Afrikaans": "af-ZA-WillemNeural",
     "isiZulu": "zu-ZA-ThembaNeural",
+    # Pan-African locales. Of the fourteen languages the optional detector
+    # adds, these four are the only ones with a Microsoft neural voice —
+    # confirmed by reading the published voice list on 2026-09-18 (322
+    # voices, 11 relevant locales), not by assuming a locale exists because
+    # the language is widely spoken. The other ten fall through to MMS.
+    #
+    # Swahili resolves to the Kenyan locale rather than Tanzanian; both
+    # exist and neither is more correct for an app that does not ask which.
+    "Amharic": "am-ET-MekdesNeural",
+    "French": "fr-FR-HenriNeural",
+    "Somali": "so-SO-UbaxNeural",
+    "Swahili": "sw-KE-ZuriNeural",
 }
 
 # VITS degrades on long inputs (attention alignment drifts and memory
@@ -236,7 +249,10 @@ def related_language_voices() -> dict[str, str]:
 RELATED_LANGUAGE_VOICES = _NGUNI_ROUTES
 
 
-def voice_coverage(mms_codes: dict[str, str] | None = None) -> dict[str, str]:
+def voice_coverage(
+    mms_codes: dict[str, str] | None = None,
+    languages: list[str] | None = None,
+) -> dict[str, str]:
     """Which tier each language currently falls into, for display.
 
     Reports capability, not attempts: it does not download anything, so it
@@ -257,8 +273,13 @@ def voice_coverage(mms_codes: dict[str, str] | None = None) -> dict[str, str]:
     """
     from bao.core.config import LABELS
 
+    # Defaults to the eleven South African languages. The caller passes a
+    # wider list when the pan-African detector is on, because those twelve
+    # extra voices are only reachable when their languages can be detected
+    # in the first place — reporting coverage for a language the app will
+    # never identify would be noise.
     coverage = {}
-    for language in LABELS:
+    for language in languages or LABELS:
         # Fallbacks off — anything returned is a voice for the language itself.
         spoken, _ = resolve_voice_language(language, mms_codes)
         if spoken is not None:
@@ -272,10 +293,23 @@ def voice_coverage(mms_codes: dict[str, str] | None = None) -> dict[str, str]:
     return coverage
 
 
-# Verified against Hugging Face on 2026-08-30 with an authenticated request.
-# Everything else in DEFAULT_MMS_CODES returned 404. Listed explicitly so
-# coverage can be reported without a network call.
-_KNOWN_MMS_VOICES = {"tso", "eng"}
+# Codes with a real facebook/mms-tts-<code> repo, verified against Hugging
+# Face with an authenticated request rather than inferred from the language
+# being widely spoken. Listed explicitly so coverage can be reported
+# without a network call.
+#
+# South African (probed 2026-08-30): only tso and eng resolve. xho, sot,
+# tsn, nso, ven, ssw, nbl and afr all 404 — MMS covers ~1100 languages but
+# not those.
+#
+# Pan-African (probed 2026-09-18): twelve of the fourteen resolve, which is
+# a far better hit rate and the reason those languages go from silent to
+# spoken without a new dependency. ibo and lin 404 under every code tried,
+# so Igbo and Lingala stay text-only and say so.
+_KNOWN_MMS_VOICES = {
+    "tso", "eng",
+    "amh", "fra", "hau", "lug", "orm", "pcm", "run", "sna", "som", "swh", "tir", "yor",
+}
 
 
 def select_backend(target_language: str, preference: str = "auto") -> str | None:

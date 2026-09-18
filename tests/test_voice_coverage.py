@@ -195,3 +195,50 @@ def test_a_registered_checkpoint_reaches_the_synthesis_path(tmp_path):
         assert voice_coverage()["Sepedi"] == "native (locally trained)"
     finally:
         speech_module.load_local_voices(original)
+
+
+# --- Pan-African voices --------------------------------------------------
+
+
+def test_the_pan_african_languages_that_have_a_voice_get_one():
+    """Twelve of the fourteen extra languages have an MMS voice, and the
+    app mapped none of them before: config.toml's mms_codes table listed
+    only the eleven South African languages, so every pan-African reply was
+    silent no matter what was installed.
+
+    Codes probed against Hugging Face rather than inferred - Oromo is
+    "orm", not the "gaz" its ISO 639-3 macrolanguage member suggests.
+    """
+    from bao.core.config import PAN_AFRICAN_LABELS, Settings
+
+    codes = Settings().mms_codes
+    coverage = voice_coverage(codes, languages=PAN_AFRICAN_LABELS)
+
+    spoken = {lang for lang, tier in coverage.items() if tier.startswith("native")}
+    assert spoken == set(PAN_AFRICAN_LABELS) - {"Igbo", "Lingala"}
+
+
+@pytest.mark.parametrize("language", ["Igbo", "Lingala"])
+def test_igbo_and_lingala_report_no_voice_rather_than_failing_late(language):
+    """mms-tts-ibo and mms-tts-lin 404, as do the alternative codes tried.
+
+    Recorded as an absent voice so the interface says so up front, instead
+    of the request failing at synthesis time with an error that reads like
+    a bug. A language with no voice is a fact about the world; a language
+    that looks supported and then produces nothing is a defect.
+    """
+    from bao.core.config import Settings
+
+    assert Settings().mms_codes.get(language) is None
+    spoken, note = resolve_voice_language(language, Settings().mms_codes)
+    assert spoken is None
+    assert language in note
+
+
+def test_edge_voices_are_preferred_where_microsoft_has_the_locale():
+    """Four of the fourteen have a real Microsoft neural voice. Those must
+    route to edge rather than MMS, for the same reason English does: a
+    native neural voice beats a generic multilingual one.
+    """
+    for language in ("Amharic", "French", "Somali", "Swahili"):
+        assert select_backend(language, "auto") == "edge", language
