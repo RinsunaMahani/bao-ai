@@ -12,6 +12,7 @@ import bao.services.speech as speech_module
 from bao.services.speech import (
     RELATED_LANGUAGE_VOICES,
     resolve_voice_language,
+    select_backend,
     voice_coverage,
 )
 
@@ -106,3 +107,91 @@ def test_coverage_reports_every_language():
     coverage = voice_coverage()
     assert set(coverage) == set(LABELS)
     assert sum(1 for tier in coverage.values() if tier == "native") == 4
+
+
+# --- Coverage and synthesis must agree ----------------------------------
+
+
+@pytest.mark.parametrize("with_local_checkpoint", [False, True])
+def test_coverage_never_claims_a_tier_synthesis_will_not_honour(
+    tmp_path, with_local_checkpoint
+):
+    """The sidebar may not promise audio the audio path will not produce.
+
+    This is the regression that motivated deriving voice_coverage() from
+    resolve_voice_language() instead of re-deriving the tiers from the same
+    tables. The two were independent walks over overlapping data and they
+    drifted: coverage consulted LOCAL_VOICE_MODELS and
+    related_language_voices(), the resolver consulted neither. Registering
+    a locally trained Sepedi checkpoint made the interface report
+    "Sepedi — native (locally trained)" and "Sesotho — related (Sepedi)"
+    while speak() returned no audio for either.
+
+    Parametrised over the checkpoint because the two walks AGREED when
+    nothing was registered — which is why the whole existing suite passed
+    while the feature was broken. The disagreement only appears in the
+    state the feature exists for.
+    """
+    from bao.core.config import LABELS
+
+    original = dict(speech_module.LOCAL_VOICE_MODELS)
+    try:
+        if with_local_checkpoint:
+            checkpoint = tmp_path / "sepedi_vits"
+            checkpoint.mkdir()
+            speech_module.load_local_voices({"Sepedi": str(checkpoint)})
+        else:
+            speech_module.load_local_voices({})
+
+        coverage = voice_coverage()
+        for language in LABELS:
+            tier = coverage[language]
+            native, _ = resolve_voice_language(language)
+            related, _ = resolve_voice_language(language, allow_related=True)
+
+            if tier.startswith("native"):
+                assert native == language, (
+                    f"coverage calls {language} {tier!r} but the resolver "
+                    f"returns {native!r} for it"
+                )
+            elif tier.startswith("related"):
+                assert related is not None and related != language, (
+                    f"coverage offers {language} a related voice but the "
+                    f"resolver returns {related!r}"
+                )
+                assert f"related ({related})" == tier
+            else:
+                assert tier == "text only"
+                assert related is None, (
+                    f"coverage calls {language} text-only but the resolver "
+                    f"would speak it with {related!r}"
+                )
+    finally:
+        speech_module.load_local_voices(original)
+
+
+def test_a_registered_checkpoint_reaches_the_synthesis_path(tmp_path):
+    """Registration has to change what synthesis DOES, not only what the
+    sidebar says.
+
+    Sepedi has no edge locale and mms-tts-nso 404s, so before a checkpoint
+    is registered every layer agrees there is no voice. After, all three
+    must agree there is: the resolver speaks it natively, the backend
+    router sends it to the VITS engine, and coverage reports it as locally
+    trained.
+    """
+    original = dict(speech_module.LOCAL_VOICE_MODELS)
+    try:
+        speech_module.load_local_voices({})
+        assert resolve_voice_language("Sepedi")[0] is None
+        assert select_backend("Sepedi", "auto") == "mms"  # engine exists, weights do not
+
+        checkpoint = tmp_path / "sepedi_vits"
+        checkpoint.mkdir()
+        speech_module.load_local_voices({"Sepedi": str(checkpoint)})
+
+        assert resolve_voice_language("Sepedi") == ("Sepedi", None)
+        assert select_backend("Sepedi", "auto") == "mms"
+        assert voice_coverage()["Sepedi"] == "native (locally trained)"
+    finally:
+        speech_module.load_local_voices(original)

@@ -35,6 +35,7 @@ from bao.services.language_detector import (
     SklearnLanguageDetector,
     get_language_detector,
 )
+from bao.services.speech import load_local_voices
 
 logger = get_logger(__name__)
 
@@ -56,6 +57,15 @@ def build_orchestrator(
     the rest of the graph stays identical by construction.
     """
     settings = settings or Settings()
+
+    # Registered here, before anything can ask about voice coverage.
+    # config.toml documented [speech.local_voices] in detail and nothing
+    # read it: there was no Settings property and no caller, so a
+    # checkpoint could be trained, committed and configured while the
+    # speech layer never learned it existed. Registration is global to the
+    # speech module rather than passed down the graph because voice
+    # coverage is a property of the machine, not of one orchestrator.
+    load_local_voices(settings.local_voices)
 
     knowledge_retriever = (
         KnowledgeRetriever(

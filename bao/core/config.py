@@ -155,6 +155,17 @@ class Settings:
         return self._raw.get("model", {}).get("min_detection_confidence", 0.5)
 
     @property
+    def local_voices(self) -> dict[str, str]:
+        """VITS checkpoints this project trained itself, by language name.
+
+        Read from [speech.local_voices]. Empty by default, which is the
+        state on any machine that has not synced the model files — the
+        speech layer drops paths that do not exist, so a stale entry
+        degrades one language rather than stopping the app.
+        """
+        return self._raw.get("speech", {}).get("local_voices", {})
+
+    @property
     def voice_fallback_related(self) -> bool:
         """Speak a language with a closely-related language's voice when it
         has none of its own. OFF by default: it is an approximation, and a

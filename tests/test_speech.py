@@ -214,7 +214,7 @@ def test_apostrophes_still_survive_the_wider_cleaner():
     assert "ematshan'weni" in speech_module.clean_text_for_speech("**ematshan'weni**")
 
 
-def test_local_checkpoint_unlocks_sepedi_and_the_sotho_tswana_routes(tmp_path):
+def test_local_checkpoint_unlocks_sepedi_and_the_sotho_tswana_routes(tmp_path, monkeypatch):
     """One locally trained checkpoint changes the tier of THREE languages.
 
     Sotho-Tswana substitution was originally dropped outright because
@@ -230,6 +230,16 @@ def test_local_checkpoint_unlocks_sepedi_and_the_sotho_tswana_routes(tmp_path):
     voice promises audio that never arrives.
     """
     from bao.services import speech
+
+    # A local checkpoint is a VITS model, so it needs the same
+    # torch/transformers stack MMS does. Pinned rather than left to this
+    # machine's installed packages: CI installs no speech extras, and a
+    # test whose result depends on that is testing the runner, not the
+    # policy. (Before coverage was derived from the resolver, this test
+    # passed in CI precisely BECAUSE coverage ignored the backend — it was
+    # asserting a claim the audio path could not honour.)
+    monkeypatch.setattr(speech, "_HAS_MMS_BACKEND", True)
+    monkeypatch.setattr(speech, "_HAS_EDGE_BACKEND", True)
 
     original = dict(speech.LOCAL_VOICE_MODELS)
     try:

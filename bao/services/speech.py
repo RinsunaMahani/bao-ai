@@ -39,11 +39,10 @@ import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import scipy.io.wavfile
-
-from pathlib import Path
 
 from bao.core.config import DEFAULT_MMS_CODES, DEFAULT_STT_CODES
 from bao.core.exceptions import SpeechError
@@ -242,22 +241,34 @@ def voice_coverage(mms_codes: dict[str, str] | None = None) -> dict[str, str]:
 
     Reports capability, not attempts: it does not download anything, so it
     is safe to call on every render.
+
+    Derived by ASKING resolve_voice_language, not by re-deriving the tiers
+    from the same tables a second time. The two used to be independent
+    walks over overlapping data, and they drifted: this function consulted
+    LOCAL_VOICE_MODELS and related_language_voices() while the resolver
+    consulted neither. Registering a locally trained Sepedi checkpoint
+    therefore made the sidebar report "Sepedi — native (locally trained)"
+    and "Sesotho — related (Sepedi)" while speak() returned no audio for
+    either, which is the worst version of this bug: the interface made a
+    claim about coverage that the audio path could not honour.
+
+    A tier reported here is now one synthesis will honour, by
+    construction rather than by agreement.
     """
     from bao.core.config import LABELS
 
     coverage = {}
-    routes = related_language_voices()
     for language in LABELS:
-        if language in LOCAL_VOICE_MODELS:
-            coverage[language] = "native (locally trained)"
-        elif _HAS_EDGE_BACKEND and language in _EDGE_VOICES:
-            coverage[language] = "native"
-        elif _HAS_MMS_BACKEND and (mms_codes or DEFAULT_MMS_CODES).get(language) in _KNOWN_MMS_VOICES:
-            coverage[language] = "native"
-        elif language in routes:
-            coverage[language] = f"related ({routes[language]})"
-        else:
-            coverage[language] = "text only"
+        # Fallbacks off — anything returned is a voice for the language itself.
+        spoken, _ = resolve_voice_language(language, mms_codes)
+        if spoken is not None:
+            coverage[language] = (
+                "native (locally trained)" if language in LOCAL_VOICE_MODELS else "native"
+            )
+            continue
+        # Fallbacks on — what someone who opts in would actually hear.
+        spoken, _ = resolve_voice_language(language, mms_codes, allow_related=True)
+        coverage[language] = f"related ({spoken})" if spoken else "text only"
     return coverage
 
 
@@ -288,6 +299,15 @@ def select_backend(target_language: str, preference: str = "auto") -> str | None
     # "auto" — Tier 1 only. Tiers 2 and 3 are applied by the caller via
     # resolve_voice_language(), because they change WHICH language is
     # spoken, not which backend speaks it, and that has to be visible.
+    #
+    # A checkpoint trained on this language specifically outranks a generic
+    # voice, so it is checked before edge — otherwise training an isiZulu
+    # model and registering it would change nothing, because edge already
+    # claims isiZulu. Local checkpoints are VITS, so they run on the same
+    # engine as MMS and report as "mms"; the backend is the same, only the
+    # weights differ.
+    if _HAS_MMS_BACKEND and target_language in LOCAL_VOICE_MODELS:
+        return "mms"
     if _HAS_EDGE_BACKEND and target_language in _EDGE_VOICES:
         return "edge"
     if _HAS_MMS_BACKEND:
@@ -313,15 +333,27 @@ def resolve_voice_language(
     """
     codes = mms_codes or DEFAULT_MMS_CODES
 
-    # Tier 1 — a real voice for this language.
+    # Tier 1 — a real voice for this language. A locally trained checkpoint
+    # comes first: it was trained on this language rather than merely
+    # covering it. Gated on the MMS backend because a local checkpoint is a
+    # VITS model and needs the same torch/transformers stack to run —
+    # promising a voice that cannot be loaded is the failure this whole
+    # tier system exists to avoid.
+    if _HAS_MMS_BACKEND and target_language in LOCAL_VOICE_MODELS:
+        return target_language, None
     if _HAS_EDGE_BACKEND and target_language in _EDGE_VOICES:
         return target_language, None
     if _HAS_MMS_BACKEND and codes.get(target_language) in _KNOWN_MMS_VOICES:
         return target_language, None
 
-    # Tier 2 — a closely-related language, opt-in.
-    if allow_related and target_language in RELATED_LANGUAGE_VOICES:
-        related = RELATED_LANGUAGE_VOICES[target_language]
+    # Tier 2 — a closely-related language, opt-in. Read from the FUNCTION,
+    # not the static table: the Sotho-Tswana routes exist only while a
+    # Sepedi checkpoint is registered, and the static table never carried
+    # them. Using it here is what made those routes unreachable no matter
+    # what was installed.
+    routes = related_language_voices()
+    if allow_related and target_language in routes:
+        related = routes[target_language]
         speakable, _ = resolve_voice_language(related, codes)
         if speakable:
             return speakable, (
@@ -430,31 +462,42 @@ _TTS_MODELS: dict[str, tuple] = {}
 _TTS_FAILURES: dict[str, str] = {}
 
 
-def load_tts_model(mms_code: str):
-    """Loads (and memoizes) an MMS voice. Raises on failure, but only the
+def load_tts_model(mms_code: str, local_path: str | None = None):
+    """Loads (and memoizes) a VITS voice. Raises on failure, but only the
     first attempt actually tries — subsequent calls re-raise the recorded
     reason immediately.
+
+    `local_path` points at a checkpoint this project trained itself. A
+    local directory and a Hugging Face repo id are interchangeable to
+    `from_pretrained`, so a locally trained voice needs no separate
+    synthesis path — only a different source. That is the whole reason
+    the feature is a few lines rather than a second backend.
+
+    The cache is keyed on the SOURCE, not the language code, so a local
+    checkpoint and the pretrained repo for the same code can coexist and
+    a failure against one is never remembered against the other.
     """
-    if mms_code in _TTS_MODELS:
-        return _TTS_MODELS[mms_code]
-    if mms_code in _TTS_FAILURES:
-        raise SpeechError(_TTS_FAILURES[mms_code])
+    key = local_path or mms_code
+    if key in _TTS_MODELS:
+        return _TTS_MODELS[key]
+    if key in _TTS_FAILURES:
+        raise SpeechError(_TTS_FAILURES[key])
 
     if not _HAS_MMS_BACKEND:
-        raise ImportError("torch and transformers are required for MMS speech synthesis.")
+        raise ImportError("torch and transformers are required for VITS speech synthesis.")
 
-    model_name = f"facebook/mms-tts-{mms_code}"
+    source = local_path or f"facebook/mms-tts-{mms_code}"
     try:
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model = VitsModel.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(source)
+        model = VitsModel.from_pretrained(source)
         model.eval()
     except Exception as e:
         # Remembered so it is attempted once per process, not once per turn.
-        _TTS_FAILURES[mms_code] = f"{model_name} could not be loaded: {e}"
+        _TTS_FAILURES[key] = f"{source} could not be loaded: {e}"
         raise
 
-    _TTS_MODELS[mms_code] = (tokenizer, model)
-    logger.info(f"Loaded MMS-TTS model for language code '{mms_code}'")
+    _TTS_MODELS[key] = (tokenizer, model)
+    logger.info(f"Loaded VITS voice from '{source}'.")
     return tokenizer, model
 
 
@@ -482,8 +525,9 @@ def _synthesize_mms(
     mms_code: str,
     speaking_rate: float | None,
     noise_scale: float | None,
+    local_path: str | None = None,
 ) -> SpeechAudio | None:
-    tokenizer, model = load_tts_model(mms_code)
+    tokenizer, model = load_tts_model(mms_code, local_path=local_path)
 
     # VitsModel.forward reads these off the instance, so setting them here
     # is the supported way to control pacing. speaking_rate < 1.0 is
@@ -633,10 +677,16 @@ def synthesize_speech(
 
         codes = mms_codes or DEFAULT_MMS_CODES
         mms_code = codes.get(target_language, "eng")
+        # A checkpoint registered for this language replaces the pretrained
+        # repo as the source. Nothing else about the path changes: same
+        # engine, same chunking, same pacing controls.
+        local_path = LOCAL_VOICE_MODELS.get(target_language)
         sentences = split_into_sentences(text)
         if not sentences:
             return None
-        return _synthesize_mms(sentences, mms_code, speaking_rate, noise_scale)
+        return _synthesize_mms(
+            sentences, mms_code, speaking_rate, noise_scale, local_path=local_path
+        )
     except Exception as e:
         # Deliberately a one-line warning, not logger.exception: the
         # common cause is "edge-tts is online and there's no network,"
@@ -673,6 +723,18 @@ def _explain_failure(chosen: str, target_language: str, mms_codes: dict | None, 
 
     code = (mms_codes or DEFAULT_MMS_CODES).get(target_language, "eng")
     lowered = detail.lower()
+
+    # A locally trained checkpoint never touches the hub, so none of the
+    # 401/404/rate-limit advice below applies to it. Telling someone to set
+    # a HF_TOKEN when the real problem is a half-synced directory on their
+    # own disk sends them to fix the wrong thing.
+    local_path = LOCAL_VOICE_MODELS.get(target_language)
+    if local_path:
+        return (
+            f"The locally trained {target_language} voice at {local_path} could not "
+            f"be loaded: {detail[:120]}. Check the checkpoint directory is complete, "
+            f"or unregister it from [speech.local_voices] in config.toml to fall back."
+        )
 
     # transformers reports EVERY hub failure with the same sentence — "is not
     # a local folder and is not a valid model identifier" — regardless of

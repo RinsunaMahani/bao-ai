@@ -49,15 +49,18 @@ stt_codes = { "Afrikaans" = "af-ZA", "English" = "en-ZA", "isiNdebele" = "nr-ZA"
 # "mms"  = always offline MMS. "edge" = edge only (silent for the other 8).
 backend = "auto"
 # Voice coverage fallbacks, both OFF by default.
-#   fallback_related_voice: speak isiXhosa/siSwati/isiNdebele with the
-#     isiZulu voice. All Nguni, so the model has seen the orthography
-#     Also enables Sesotho/Setswana with the Sepedi voice, but ONLY
-#     when a Sepedi checkpoint is registered under [speech.local_voices]
-#     below — no Sotho-Tswana voice ships on Hugging Face.
-#     including the click letters — but it is still an approximation.
-#     There is deliberately NO equivalent for Sesotho/Setswana/Sepedi
-#     (no voice exists anywhere in that family) or Tshivenda (Venda is
-#     not close to Tsonga and uses diacritics Tsonga lacks).
+#   fallback_related_voice: speak a language with a closely-related
+#     language's voice.
+#       - isiXhosa / siSwati / isiNdebele -> isiZulu. All Nguni, so the
+#         model has seen the orthography including the click letters —
+#         but it is still an approximation.
+#       - Sesotho / Setswana -> Sepedi. Available ONLY while a Sepedi
+#         checkpoint is registered under [speech.local_voices] below,
+#         because no Sotho-Tswana voice ships on Hugging Face. Without
+#         one, all three stay text-only.
+#       - There is deliberately NO route for Tshivenda: Venda is its own
+#         branch of Bantu, Tsonga is Tswa-Ronga, and Venda orthography
+#         uses dental diacritics (ṱ ḓ ṋ ḽ) that Tsonga lacks entirely.
 #   fallback_english_voice: speak the reply in English instead.
 # Either way the interface states which voice was used. A substitution
 # the listener is told about is a fallback; one they are not told about
@@ -76,6 +79,13 @@ noise_scale = 0.35      # Prosody variance, MMS only (< 0.667 removes robotic pi
 # voice, and it unlocks the Sesotho/Setswana Tier 2 routes, which are
 # unavailable otherwise because the whole Sotho-Tswana family 404s on
 # Hugging Face.
+#
+# A checkpoint is a VITS model, so it runs on the same torch/transformers
+# stack as MMS — without requirements-speech.txt installed, a registered
+# language honestly reports as text-only rather than promising audio that
+# cannot be produced. A registered checkpoint also OUTRANKS a generic
+# voice for the same language: train an isiZulu model and it is used in
+# place of the edge-tts one.
 # Sepedi = "models/voices/sepedi_vits"
 # isiZulu = "models/voices/isizulu_vits"
 # Xitsonga = "models/voices/xitsonga_vits"

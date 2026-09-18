@@ -160,11 +160,20 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
             st.info("Not installed — install `requirements-speech.txt` for spoken replies.")
 
         coverage = voice_coverage(settings.mms_codes)
-        native = [lang for lang, tier in coverage.items() if tier == "native"]
+        # startswith, not equality: a locally trained checkpoint reports as
+        # "native (locally trained)", which is the BEST tier, not an
+        # approximation. Exact matching excluded it from the count and gave
+        # it the amber "substituted voice" icon.
+        native = [lang for lang, tier in coverage.items() if tier.startswith("native")]
         st.caption(f"Native voices: {len(native)} of {len(coverage)}")
         with st.expander("Voice coverage by language"):
             for language, tier in coverage.items():
-                icon = {"native": "🟢", "text only": "⚪"}.get(tier, "🟡")
+                if tier.startswith("native"):
+                    icon = "🟢"
+                elif tier == "text only":
+                    icon = "⚪"
+                else:
+                    icon = "🟡"
                 st.caption(f"{icon} **{language}** — {tier}")
             st.caption(
                 "Seven of the eleven have no open text-to-speech model. "
@@ -307,8 +316,15 @@ def _handle_turn(
 
         placeholder.empty()
 
+        # Drawn into a placeholder and rewritten after speech, because half
+        # of what the badge reports is not known until then: `speak()` is
+        # what sets `speech_language`, so a badge rendered once — before it
+        # ran — silently dropped the "voice: ..." suffix that exists to make
+        # a cross-lingual voice visible. That suffix has been dead since
+        # synthesis moved out of the blocking path.
+        badge_slot = st.empty()
         badge = _format_detection_badge(result)
-        st.caption(badge)
+        badge_slot.caption(badge)
         st.markdown(result.text)
 
         # Text is on screen and the turn is usable from here on. Speech is
@@ -316,6 +332,8 @@ def _handle_turn(
         if st.session_state.get("speech_enabled", True):
             with st.spinner("Generating voice..."):
                 orchestrator.speak(result)
+            badge = _format_detection_badge(result)
+            badge_slot.caption(badge)
             if result.audio:
                 st.audio(result.audio, format=result.audio_mime)
                 if result.voice_note:
