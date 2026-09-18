@@ -417,12 +417,27 @@ column is whatever your run produces.
 
 Stated here so they are read rather than discovered.
 
-- **Speech covers 4 of 11 languages.** English, Afrikaans and isiZulu have
-  real South African voices (edge-tts, online); Xitsonga has an offline
-  one. The other seven have **no open text-to-speech model at all** —
-  verified against Hugging Face with an authenticated request on
-  2026-08-30, where `mms-tts-xho`, `-sot`, `-tsn`, `-nso`, `-ven`, `-ssw`
-  and `-nbl` all return 404. Those languages answer in text.
+- **Speech covers 4 of 11 languages out of the box, 11 of 11 opt-in.**
+  English, Afrikaans and isiZulu have real South African voices (edge-tts,
+  online); Xitsonga has an offline one. No *pretrained MMS* voice exists
+  for the other seven — verified against Hugging Face with an
+  authenticated request on 2026-08-30, where `mms-tts-xho`, `-sot`,
+  `-tsn`, `-nso`, `-ven`, `-ssw` and `-nbl` all return 404. Those seven
+  are covered by a multilingual South African VITS model that is **off by
+  default because it is cc-by-nc-4.0** while this project is MIT: see
+  `[speech].enable_coqui_sa` in `config.toml`. Its own model card is an
+  unfilled template with no published evaluation, so its quality is
+  unverified here. Left off, those languages answer in text.
+- **Pan-African speech covers 12 of 14.** Enabling the pan-African
+  detector brings twelve offline MMS voices, four of which also have a
+  Microsoft neural locale (Amharic, French, Somali, Swahili) — all probed
+  on 2026-09-18 rather than assumed. Igbo and Lingala have no voice:
+  `mms-tts-ibo` and `mms-tts-lin` 404 under every code tried.
+- **Luganda is detected as Xitsonga.** The pan-African model identifies it
+  correctly but at 43% confidence, just under the 44% that English reaches
+  as Nigerian Pidgin. Admitting Luganda would mean relabelling English, so
+  24 of 25 languages route correctly and this one does not. Reproduce with
+  `python scripts/probe_language_routing.py`.
 - **The 0.98 macro F1 is the original training-corpus evaluation.** This
   project independently validated the *deployed* inference path (20/20
   across three small probe sets), which is not the same claim.

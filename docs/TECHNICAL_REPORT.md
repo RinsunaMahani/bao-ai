@@ -249,12 +249,24 @@ question — all verified to behave correctly with no exceptions.
   fact translated into another language still costs one API round trip,
   a real reliability dependency for offline-first claims about that
   specific path.
-- **Speech coverage is partial**: four of the eleven languages have a
-  voice (English, Afrikaans and isiZulu via edge-tts; Xitsonga via Meta
-  MMS). The other seven have no open text-to-speech model — verified
-  against Hugging Face with an authenticated request on 2026-08-30, where
-  `mms-tts-xho`, `-sot`, `-tsn`, `-nso`, `-ven`, `-ssw` and `-nbl` all
-  return 404. Replies in those languages are shown as text.
+- **Speech coverage is partial by default**: four of the eleven languages
+  have a voice without further configuration (English, Afrikaans and
+  isiZulu via edge-tts; Xitsonga via Meta MMS). No pretrained MMS voice
+  exists for the other seven — verified against Hugging Face with an
+  authenticated request on 2026-08-30, where `mms-tts-xho`, `-sot`,
+  `-tsn`, `-nso`, `-ven`, `-ssw` and `-nbl` all return 404. A multilingual
+  South African VITS model covers all eleven and is available opt-in; it
+  is off by default because it is licensed cc-by-nc-4.0 while this project
+  is MIT, so enabling it makes a deployment non-commercial, and because
+  its model card carries no evaluation this project could check. Left off,
+  replies in those seven languages are shown as text.
+- **Alternatives were ruled out by measurement, not assumption**: Google
+  Translate's TTS endpoint returns HTTP 400 for all nine indigenous South
+  African languages, so it can translate them but not speak them;
+  Microsoft publishes 322 voices of which 11 are relevant locales, which
+  is the three already used; and the one apache-2.0 alternative covering
+  part of the gap is a 6.63 GB 3B-parameter model, the wrong shape for an
+  offline-first system on modest hardware.
 - **The 0.98 macro F1 is the original training-corpus evaluation**, not a
   figure this project independently reproduced. What was independently
   validated is the *deployed inference path*: 20/20 across three small
