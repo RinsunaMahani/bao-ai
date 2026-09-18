@@ -7,7 +7,7 @@ gemini_model = "gemini-3.6-flash"
 # message, not just the new languages. Enable it, run
 #   python scripts/gates.py
 # and check the 11 SA languages still detect correctly before demoing.
-enable_pan_african = false
+enable_pan_african = true
 # Detection below this confidence is shown to the user but NOT used to
 # choose the reply language — the app answers in English instead.
 # A weak guess otherwise produces an answer in the wrong language, not
@@ -85,7 +85,12 @@ noise_scale = 0.35      # Prosody variance, MMS only (< 0.667 removes robotic pi
 #     evaluation, so listen to it before you demo it.
 #
 # Needs `pip install coqui-tts`, and downloads ~150 MB on first use.
-enable_coqui_sa = false
+enable_coqui_sa = true
+# Which of the model's 130 speakers to use. They are anonymous
+# (speaker_0 .. speaker_129) and carry no language or gender, so there is
+# no way to derive a good one — pick by ear. Empty = first in sorted
+# order, which is deterministic rather than chosen.
+coqui_speaker = ""
 
 [speech.local_voices]
 # VITS checkpoints this project trained itself, by language. Point each

@@ -217,6 +217,18 @@ class Settings:
         return self._raw.get("speech", {}).get("enable_coqui_sa", False)
 
     @property
+    def coqui_sa_speaker(self) -> str | None:
+        """Which of the SA VITS model's 130 speakers to speak with.
+
+        The ids are anonymous (`speaker_0` .. `speaker_129`) and carry no
+        language or gender, so there is no principled way to choose one —
+        it is picked by ear. Unset means the first in sorted order, which
+        is deterministic rather than good.
+        """
+        value = self._raw.get("speech", {}).get("coqui_speaker", "")
+        return str(value).strip() or None
+
+    @property
     def local_voices(self) -> dict[str, str]:
         """VITS checkpoints this project trained itself, by language name.
 

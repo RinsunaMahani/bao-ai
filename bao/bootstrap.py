@@ -35,7 +35,7 @@ from bao.services.language_detector import (
     SklearnLanguageDetector,
     get_language_detector,
 )
-from bao.services.speech import enable_coqui_sa, load_local_voices
+from bao.services.speech import enable_coqui_sa, load_local_voices, set_coqui_speaker
 
 logger = get_logger(__name__)
 
@@ -72,6 +72,7 @@ def build_orchestrator(
     # Settings.coqui_sa_enabled. Registered here so the voice tiers know
     # about it before anything asks what can be spoken.
     enable_coqui_sa(settings.coqui_sa_enabled)
+    set_coqui_speaker(settings.coqui_sa_speaker)
 
     knowledge_retriever = (
         KnowledgeRetriever(

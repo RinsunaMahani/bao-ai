@@ -16,6 +16,14 @@ edge-tts>=6.1.0
 # the original `TTS` package caps at Python <3.12 while this supports
 # 3.10-3.14, and both install the same import name.
 #
-# The model itself is cc-by-nc-4.0 and gated, and is OFF by default. See
-# [speech].enable_coqui_sa in config.toml before switching it on.
-# coqui-tts>=0.27.0
+# The MODEL is cc-by-nc-4.0 and gated. See [speech].enable_coqui_sa in
+# config.toml, and accept the terms at the model page once with HF_TOKEN
+# set, or every fetch returns 403.
+#
+# Install with:  pip install -e ".[coqui]"
+#
+# Not a plain `pip install coqui-tts`: it needs the [codec] extra for
+# torchcodec (PyTorch 2.9+ audio IO), torchaudio which it imports but does
+# not declare, and transformers <5 — coqui-tts 0.27.5 imports
+# `isin_mps_friendly`, removed in transformers 5.x. Verified working on
+# torch 2.13.0, transformers 4.57.6, torchaudio 2.11.0, torchcodec 0.16.0.

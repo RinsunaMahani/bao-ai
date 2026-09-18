@@ -260,15 +260,16 @@ def coqui_on(monkeypatch):
     monkeypatch.setattr(speech_module, "_COQUI_ENABLED", True)
 
 
-def test_it_is_off_unless_configured():
+def test_it_is_off_unless_configured(default_settings):
     """Off by default for a licence reason, not a technical one: the model
     is cc-by-nc-4.0 and this repository is MIT, so turning it on makes a
     deployment non-commercial. That is a choice someone has to make.
-    """
-    from bao.core.config import Settings
 
-    assert Settings().coqui_sa_enabled is False
-    assert speech_module.has_coqui_backend() is False
+    Reads the default rather than this machine's config.toml, which may
+    legitimately have made that choice — see tests/conftest.py.
+    """
+    assert default_settings.coqui_sa_enabled is False
+    assert default_settings.coqui_sa_speaker is None
 
 
 def test_asking_for_it_without_the_library_leaves_it_off(monkeypatch):
@@ -320,3 +321,39 @@ def test_xitsonga_keeps_its_verified_mms_voice(coqui_on):
     A verified voice is not replaced by an unevaluated one.
     """
     assert select_backend("Xitsonga", "auto") == "mms"
+
+
+# --- Characters the SA VITS checkpoint cannot represent -------------------
+
+
+@pytest.mark.parametrize("raw,expected", [
+    # Sepedi: dropping the s-caron turns "thusho" into "thuo".
+    ("thušo", "thusho"),
+    ("tša sekolo", "tsha sekolo"),
+    # Tshivenda dental consonants, which vanished entirely.
+    ("ṱoḓa", "toda"),
+    ("ḽa na ṋea", "la na nea"),
+    # Sesotho long vowels.
+    ("ōē", "oe"),
+])
+def test_unrepresentable_characters_are_folded_not_dropped(raw, expected):
+    """Coqui discards a symbol outside its vocabulary, which is the worst
+    option available: it does not fail, it changes the word.
+
+    The checkpoint's 138-symbol vocabulary has no š, no ṱ/ḓ/ṋ/ḽ and no
+    ō/ē, so three of the languages it exists to serve were being
+    mispronounced by the model meant to fix their silence.
+    """
+    from bao.services.speech import fold_to_coqui_vocabulary
+
+    assert fold_to_coqui_vocabulary(raw) == expected
+
+
+def test_folding_leaves_ordinary_text_untouched():
+    """It must not become a general text mangler: every other language
+    here is written in characters the model already has.
+    """
+    from bao.services.speech import fold_to_coqui_vocabulary
+
+    for text in ("Molo, ndicela uncedo", "Sawubona, unjani na", "Goeiedag almal"):
+        assert fold_to_coqui_vocabulary(text) == text

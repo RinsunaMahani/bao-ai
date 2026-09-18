@@ -417,17 +417,25 @@ column is whatever your run produces.
 
 Stated here so they are read rather than discovered.
 
-- **Speech covers 4 of 11 languages out of the box, 11 of 11 opt-in.**
+- **Speech covers 11 of 11 South African languages in this deployment,
+  4 of 11 on a fresh clone.**
   English, Afrikaans and isiZulu have real South African voices (edge-tts,
   online); Xitsonga has an offline one. No *pretrained MMS* voice exists
   for the other seven — verified against Hugging Face with an
   authenticated request on 2026-08-30, where `mms-tts-xho`, `-sot`,
   `-tsn`, `-nso`, `-ven`, `-ssw` and `-nbl` all return 404. Those seven
-  are covered by a multilingual South African VITS model that is **off by
-  default because it is cc-by-nc-4.0** while this project is MIT: see
-  `[speech].enable_coqui_sa` in `config.toml`. Its own model card is an
-  unfilled template with no published evaluation, so its quality is
-  unverified here. Left off, those languages answer in text.
+  are covered by a multilingual South African VITS model, enabled here via
+  `[speech].enable_coqui_sa` in `config.toml`. **The code default is off,
+  and deliberately so: the model is cc-by-nc-4.0 while this project is
+  MIT, so enabling it makes a deployment non-commercial.** That is
+  appropriate for an academic project and would not be for a product. The
+  model is gated on Hugging Face (automatic approval) and downloaded at
+  runtime, never vendored. Its own model card is an unfilled template with
+  no published evaluation, so its quality is not independently verified
+  here. Its 138-symbol vocabulary also lacks `š`, the Tshivenda dental set
+  `ṱ ḓ ṋ ḽ`, and `ō ē`; Coqui discards unknown symbols, so those are
+  folded to their nearest equivalents before synthesis rather than being
+  dropped mid-word.
 - **Pan-African speech covers 12 of 14.** Enabling the pan-African
   detector brings twelve offline MMS voices, four of which also have a
   Microsoft neural locale (Amharic, French, Somali, Swahili) — all probed

@@ -135,6 +135,20 @@ _EDGE_VOICES = {
 # a clear message rather than silently picking the wrong voice — see
 # _synthesize_coqui.
 COQUI_SA_REPO = "guymandude/South-African-TTS-11-Vits"
+
+# Which of the model's 130 speakers to use. Set from config.toml via
+# set_coqui_speaker(). Falls back to the first in sorted order when unset
+# or unknown, so a typo degrades to a working voice rather than an error
+# raised deep inside Coqui.
+COQUI_SA_SPEAKER: str | None = None
+
+
+def set_coqui_speaker(name: str | None) -> None:
+    """Chooses the speaker voice. There is no way to derive a good choice:
+    the ids are anonymous and carry no language, so this is picked by ear.
+    """
+    global COQUI_SA_SPEAKER
+    COQUI_SA_SPEAKER = name or None
 COQUI_SA_LANGUAGES = {
     "Afrikaans": "afr", "English": "eng", "isiNdebele": "nbl", "Sepedi": "nso",
     "Sesotho": "sot", "siSwati": "ssw", "Setswana": "tsn", "Xitsonga": "tso",
@@ -724,6 +738,9 @@ def load_coqui_synthesizer():
         raise ImportError("coqui-tts is required for the South African VITS model.")
 
     try:
+        import json
+        import tempfile
+
         from huggingface_hub import hf_hub_download
 
         # Fetched file by file rather than with snapshot_download so a
@@ -734,9 +751,40 @@ def load_coqui_synthesizer():
             for name in ("config.json", "vits_11_ZA_model.pth",
                          "model_speakers.pth", "language_ids.json")
         }
+
+        # The published config.json still carries the absolute paths from
+        # the machine it was trained on, in four places:
+        #
+        #   ./models/11-ZA_multilingual/11_ZA-May-16-2023_.../speakers.pth
+        #   ./models/11-ZA_multilingual/11_ZA-May-16-2023_.../language_ids.json
+        #
+        # both at the top level and again under model_args. Coqui reads
+        # them from the config rather than from the arguments below, so
+        # loading fails with FileNotFoundError on a directory that only
+        # ever existed on the author's disk — which is also why passing the
+        # files explicitly is not enough on its own.
+        #
+        # The speakers file is additionally named `model_speakers.pth` in
+        # the repo and `speakers.pth` in the config, so even a same-shaped
+        # local checkout would not line up.
+        #
+        # Rewritten to the downloaded copies in a temporary config rather
+        # than in place: hf_hub_download returns a path inside the shared
+        # Hugging Face cache, and editing a cached artefact would corrupt
+        # it for every other tool on the machine.
+        config = json.loads(Path(paths["config.json"]).read_text(encoding="utf-8"))
+        for holder in (config, config.get("model_args", {})):
+            if "speakers_file" in holder:
+                holder["speakers_file"] = paths["model_speakers.pth"]
+            if "language_ids_file" in holder:
+                holder["language_ids_file"] = paths["language_ids.json"]
+
+        patched = Path(tempfile.gettempdir()) / "bao_coqui_sa_config.json"
+        patched.write_text(json.dumps(config), encoding="utf-8")
+
         _COQUI_SYNTH = _CoquiSynthesizer(
             tts_checkpoint=paths["vits_11_ZA_model.pth"],
-            tts_config_path=paths["config.json"],
+            tts_config_path=str(patched),
             tts_speakers_file=paths["model_speakers.pth"],
             tts_languages_file=paths["language_ids.json"],
             use_cuda=False,
@@ -785,19 +833,70 @@ def reset_coqui_cache() -> None:
     _COQUI_FAILURE = None
 
 
+# Characters three of these orthographies need that the checkpoint's
+# 138-symbol vocabulary does not contain. Coqui's behaviour for an unknown
+# symbol is to DISCARD it, which is the worst of the available options: it
+# does not fail, it changes the word. Sepedi "thušo" is spoken as "thuo",
+# and every Tshivenda dental consonant simply vanishes.
+#
+# Folded to the nearest symbol the model does have. Each of these is the
+# conventional plain-ASCII equivalent, not a guess:
+#
+#   š  -> sh   the standard romanisation, and what the digraph represents
+#   ṱ ḓ ṋ ḽ    dental consonants; the plain letters are the same place of
+#              articulation, differing in dentality alone, so t/d/n/l is
+#              the closest sound in the vocabulary
+#   ō ē  -> o e   long vowels to their short counterparts
+#
+# This is an approximation and is only reached for a language that would
+# otherwise have no voice at all. It is applied ONLY here: MMS and edge
+# have their own vocabularies and neither needs it.
+_COQUI_CHARACTER_FOLD = str.maketrans({
+    "š": "sh", "Š": "Sh",
+    "ṱ": "t", "Ṱ": "T", "ḓ": "d", "Ḓ": "D",
+    "ṋ": "n", "Ṋ": "N", "ḽ": "l", "Ḽ": "L",
+    "ō": "o", "Ō": "O", "ē": "e", "Ē": "E",
+})
+
+
+def fold_to_coqui_vocabulary(text: str) -> str:
+    """Replaces characters the SA VITS checkpoint cannot represent with
+    their nearest equivalent, rather than letting it drop them.
+    """
+    folded = text.translate(_COQUI_CHARACTER_FOLD)
+    if folded != text:
+        logger.info(
+            "Folded characters outside the SA VITS vocabulary (e.g. š, ṱ, ḓ) "
+            "to their nearest equivalents before synthesis."
+        )
+    return folded
+
+
 def _synthesize_coqui(text: str, target_language: str) -> SpeechAudio | None:
     synthesizer = load_coqui_synthesizer()
     language_id = COQUI_SA_LANGUAGES[target_language]
 
-    # The model is multi-speaker; a language id alone does not identify a
-    # voice. Speakers are read off the loaded model rather than hard-coded,
-    # because the names are the checkpoint's own and a wrong one raises
-    # deep inside Coqui with an unhelpful message.
+    # The model is multi-speaker: 130 anonymous NCHLT speakers, named
+    # speaker_0 .. speaker_129. A language id alone does not identify a
+    # voice, so one has to be chosen.
+    #
+    # SORTED, not just "the first one the manager yields". That ordering
+    # comes from a dict built at load time and is not guaranteed stable, so
+    # taking it raw meant the assistant could speak in a different voice
+    # between runs — which is worse than an imperfect voice, because it is
+    # an inconsistent one. Sorting makes the default deterministic.
+    #
+    # Which speaker is "right" is not recoverable from the checkpoint: the
+    # ids carry no language or gender, so there is no principled way to
+    # match a speaker to the language being spoken. The language embedding
+    # is what drives pronunciation; the speaker embedding only sets voice
+    # identity. COQUI_SA_SPEAKER exists so a better-sounding one can be
+    # picked by ear, which is the only way it can be picked.
     speaker = None
-    manager = getattr(synthesizer, "tts_speakers_file", None) and getattr(
-        synthesizer.tts_model, "speaker_manager", None)
-    if manager is not None and getattr(manager, "speaker_names", None):
-        speaker = manager.speaker_names[0]
+    manager = getattr(synthesizer.tts_model, "speaker_manager", None)
+    names = sorted(getattr(manager, "speaker_names", None) or [])
+    if names:
+        speaker = COQUI_SA_SPEAKER if COQUI_SA_SPEAKER in names else names[0]
 
     known = getattr(getattr(synthesizer.tts_model, "language_manager", None),
                     "language_names", None)
@@ -809,7 +908,9 @@ def _synthesize_coqui(text: str, target_language: str) -> SpeechAudio | None:
             "COQUI_SA_LANGUAGES."
         )
 
-    waveform = synthesizer.tts(text, speaker_name=speaker, language_name=language_id)
+    waveform = synthesizer.tts(
+        fold_to_coqui_vocabulary(text), speaker_name=speaker, language_name=language_id
+    )
     array = _normalize_waveform(np.asarray(waveform, dtype=np.float32))
     if array.size == 0:
         return None

@@ -64,7 +64,22 @@ ml = ["ai-edge-litert>=1.0.0"]
 # `speech`, because the MODEL it loads is cc-by-nc-4.0 while this project
 # is MIT: installing it must be a deliberate act, not something that
 # arrives with the voice extras.
-coqui = ["coqui-tts>=0.27.0"]
+#
+# Three constraints found by installing it, none of which coqui-tts
+# declares in a way pip resolves on its own:
+#
+#  - `[codec]`, because from PyTorch 2.9 audio IO needs torchcodec and
+#    coqui-tts raises on import without it.
+#  - torchaudio, which it imports but does not pull in.
+#  - transformers <5. coqui-tts 0.27.5 imports `isin_mps_friendly` from
+#    transformers.pytorch_utils, which 5.x removed; the import chain runs
+#    through XTTS/Tortoise, so it breaks even though this project only
+#    ever loads VITS. 4.57.6 satisfies both this and MMS.
+coqui = [
+    "coqui-tts[codec]>=0.27.0",
+    "torchaudio>=2.0.0",
+    "transformers>=4.57,<5",
+]
 pdf = ["pypdf>=4.0.0"]
 # Mirrors requirements-semantic.txt — the alternative retrieval backend
 # that compare_retrievers.py scores against TF-IDF.

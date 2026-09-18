@@ -249,17 +249,19 @@ question — all verified to behave correctly with no exceptions.
   fact translated into another language still costs one API round trip,
   a real reliability dependency for offline-first claims about that
   specific path.
-- **Speech coverage is partial by default**: four of the eleven languages
-  have a voice without further configuration (English, Afrikaans and
+- **Speech coverage depends on one configuration switch**: four of the
+  eleven languages have a voice with the shipped code defaults (English, Afrikaans and
   isiZulu via edge-tts; Xitsonga via Meta MMS). No pretrained MMS voice
   exists for the other seven — verified against Hugging Face with an
   authenticated request on 2026-08-30, where `mms-tts-xho`, `-sot`,
   `-tsn`, `-nso`, `-ven`, `-ssw` and `-nbl` all return 404. A multilingual
-  South African VITS model covers all eleven and is available opt-in; it
-  is off by default because it is licensed cc-by-nc-4.0 while this project
-  is MIT, so enabling it makes a deployment non-commercial, and because
-  its model card carries no evaluation this project could check. Left off,
-  replies in those seven languages are shown as text.
+  South African VITS model covers all eleven and is enabled in this
+  deployment, taking native coverage to 11 of 11 South African and 23 of
+  25 detectable languages. It is off in the code defaults because it is
+  licensed cc-by-nc-4.0 while this project is MIT, so enabling it makes a
+  deployment non-commercial, and because its model card carries no
+  evaluation this project could check — its audio quality is therefore
+  reported as unverified rather than measured.
 - **Alternatives were ruled out by measurement, not assumption**: Google
   Translate's TTS endpoint returns HTTP 400 for all nine indigenous South
   African languages, so it can translate them but not speak them;

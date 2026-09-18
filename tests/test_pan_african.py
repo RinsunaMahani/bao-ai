@@ -46,17 +46,24 @@ class _Stub:
 # --- The default: off ---------------------------------------------------
 
 
-def test_disabled_by_default():
-    assert Settings().pan_african_enabled is False
+def test_disabled_by_default(default_settings):
+    """Asserts the DEFAULT, not this machine's config.toml.
+
+    A deployment that switches the pan-African languages on is a choice,
+    and it must not make the suite claim the shipped default changed. So
+    this reads Settings with no config file present, which is what a fresh
+    clone sees.
+    """
+    assert default_settings.pan_african_enabled is False
 
 
-def test_default_build_leaves_the_composite_inert():
+def test_default_build_leaves_the_composite_inert(default_settings):
     """The composite is now constructed whenever a bundle exists, so the UI
     can toggle it without rebuilding the pipeline. The guarantee therefore
     moves from "not wrapped" to "wrapped but inert" — which has to be
     checked behaviourally rather than by type.
     """
-    _, orchestrator = build_orchestrator()
+    _, orchestrator = build_orchestrator(default_settings)
     detector = orchestrator.language_detector
     if isinstance(detector, CompositeLanguageDetector):
         assert detector.enabled is False, "must start disabled by default"
