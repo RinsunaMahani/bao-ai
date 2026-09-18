@@ -91,12 +91,19 @@ The model in use is centrally configured (`config.toml` /
 
 ### 3.4 Optional modalities
 
-Text-to-speech output (MMS-TTS, per-language voice models) and a static,
-single-frame sign-language hand-shape classifier (MediaPipe hand-landmark
-extraction plus a small scikit-learn classifier trained on
-self-collected data) are both implemented as genuinely optional
-capabilities: absent dependencies or missing trained assets degrade the
-specific feature, never the core application.
+Text-to-speech output is implemented as a genuinely optional capability:
+absent dependencies or missing trained assets degrade the specific
+feature, never the core application. Two backends are selected per
+language — Microsoft's neural voices (online, real en-ZA/af-ZA/zu-ZA) and
+Meta's MMS-TTS (offline) — and the seven languages with no open voice
+model are reported as such rather than silently substituted.
+
+A static, single-frame sign-language hand-shape classifier (MediaPipe
+hand landmarks feeding a small scikit-learn classifier) was prototyped
+and then **removed**; it was never trained, and static hand poses cannot
+represent a language whose vocabulary is movement and whose grammar is
+carried partly by non-manual markers. See "Sign language — removed" in
+`docs/ARCHITECTURE.md` for the full reasoning.
 
 ## 4. Evaluation
 

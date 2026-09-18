@@ -16,6 +16,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # checkout does NOT fetch LFS content by default, so the classifier
+      # and its tokenizer arrived as pointer stubs and every TFLite test
+      # skipped — CI was green on a model it never loaded.
+      #
+      # Fetched by name rather than with `lfs: true`, which would pull all
+      # four tracked assets (~96 MB per job, doubled by the matrix, against
+      # a 1 GB/month LFS quota — roughly five pushes). The other two,
+      # ultimate_african_ai.keras and tokenizer.pickle, are training
+      # artifacts with zero runtime references; only convert_model.py reads
+      # the Keras source. 27 MB instead of 96.
+      - name: Fetch the runtime model assets from LFS
+        run: |
+          git lfs install
+          git lfs pull --include="models/language_classifier.tflite,tokenizer_config.json"
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -28,9 +43,13 @@ jobs:
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
 
-      - name: Install sign-language extras (best-effort)
-        run: pip install mediapipe opencv-python-headless joblib
-        continue-on-error: true  # optional feature — CI stays green even if this platform/Python combo lacks a mediapipe wheel
+      # The on-device classifier is this project's central ML claim, so it
+      # is exercised rather than skipped. ai-edge-litert is the standalone
+      # LiteRT runtime — a few MB, not TensorFlow's ~600 — so this is cheap.
+      # The tests self-check that the interpreter really constructed
+      # (_tflite_actually_works), so a bad wheel skips instead of failing.
+      - name: Install the TFLite runtime
+        run: pip install -r requirements-ml.txt
 
       - name: Lint (ruff)
         run: ruff check .

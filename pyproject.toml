@@ -10,11 +10,23 @@ readme = "README.md"
 requires-python = ">=3.10"
 # Core dependencies: the app runs (offline knowledge retrieval + heuristic
 # language detection, no speech, no ML classifier) with just these.
+#
+# These lists MIRROR the requirements-*.txt files, which are what CI, the
+# Dockerfile and the README all install. Two dependency manifests that
+# disagree is the same failure class as a config knob nothing reads: one
+# of them is wrong and nothing says which. If you change a pin here,
+# change it there too.
 dependencies = [
     "streamlit>=1.40.0",
     "google-genai>=0.1.1",
     "python-dotenv>=1.0.1",
-    "scikit-learn>=1.4.0",
+    # 1.6+ so the pan-African detector bundle loads without an
+    # InconsistentVersionWarning (requirements.txt carries the same floor).
+    "scikit-learn>=1.6.0",
+    # Imported by name in services/language_detector.py to load that
+    # bundle, so it is declared rather than leaned on as a transitive
+    # scikit-learn dependency.
+    "joblib>=1.3.0",
     "pandas>=2.2.0",
     "numpy>=1.26.0",
     "psutil>=5.9.0",
@@ -23,14 +35,35 @@ dependencies = [
 # Everything below is optional and guarded by try/except in the modules
 # that use it (services/speech.py, services/language_detector.py,
 # knowledge/loader.py) — a missing extra degrades one feature, it never
-# crashes the app. Previously the pyproject declared `ai-edge-litert` for
-# the TFLite classifier, but the actual code has always imported
-# `tensorflow` directly (`tf.lite.Interpreter`) — the declared dependency
-# didn't match the real import. `ml` now lists what's actually used.
+# crashes the app.
 [project.optional-dependencies]
-speech = ["SpeechRecognition>=3.10.0", "scipy>=1.13.0", "pyttsx3>=2.90", "torch>=2.2.0", "transformers>=4.40.0"]
-ml = ["tensorflow>=2.15.0"]
+# Mirrors requirements-speech.txt. `edge-tts` is what produces the only
+# real South African English/Afrikaans/isiZulu voices, and sounddevice /
+# soundfile are what the console uses to play audio back, so all three
+# belong here. `pyttsx3` was listed but is imported nowhere in the
+# codebase — it is a leftover from the pre-refactor TTS path.
+speech = [
+    "SpeechRecognition>=3.10.0",
+    "scipy>=1.13.0",
+    "sounddevice>=0.4.6",
+    "soundfile>=0.12.1",
+    "torch>=2.2.0",
+    "transformers>=4.40.0",
+    "edge-tts>=6.1.0",
+]
+# Mirrors requirements-ml.txt. The classifier needs ONE thing from the
+# TensorFlow world — a TFLite interpreter — and `ai-edge-litert` is the
+# standalone runtime that provides it. Full TensorFlow publishes no
+# wheels for Python 3.14, so declaring it here made this extra
+# uninstallable on a current Python while the code's preferred import has
+# always been LiteRT. Install TensorFlow separately only to run
+# convert_model.py or tests/test_tokenizer_parity.py, both of which need
+# Keras itself.
+ml = ["ai-edge-litert>=1.0.0"]
 pdf = ["pypdf>=4.0.0"]
+# Mirrors requirements-semantic.txt — the alternative retrieval backend
+# that compare_retrievers.py scores against TF-IDF.
+semantic = ["sentence-transformers>=3.0.0"]
 dev = ["pytest>=8.0.0", "ruff>=0.6.0", "huggingface-hub>=0.18.0"]
 
 [tool.setuptools.packages]
