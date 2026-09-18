@@ -10,3 +10,12 @@ transformers>=4.40.0
 # Real South African neural voices (en-ZA/af-ZA/zu-ZA). Online, but free
 # and keyless. Optional: without it everything falls back to offline MMS.
 edge-tts>=6.1.0
+
+# Optional: the multilingual South African VITS model, the only one found
+# that speaks all eleven languages. `coqui-tts` is the maintained fork —
+# the original `TTS` package caps at Python <3.12 while this supports
+# 3.10-3.14, and both install the same import name.
+#
+# The model itself is cc-by-nc-4.0 and gated, and is OFF by default. See
+# [speech].enable_coqui_sa in config.toml before switching it on.
+# coqui-tts>=0.27.0

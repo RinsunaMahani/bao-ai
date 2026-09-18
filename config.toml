@@ -70,6 +70,23 @@ fallback_english_voice = false
 speaking_rate = 0.85   # Pacing control (< 1.0 is SLOWER; applies to both backends)
 noise_scale = 0.35      # Prosody variance, MMS only (< 0.667 removes robotic pitch jitter)
 
+# The multilingual South African VITS model (all 11 languages), which
+# closes the gap edge-tts and MMS leave: seven languages with no voice.
+# OFF by default, and the reason is licensing, not quality.
+#
+#   - cc-by-nc-4.0 = NON-COMMERCIAL. This project is MIT. The model is
+#     downloaded at runtime and never bundled, but switching this on makes
+#     what you deploy non-commercial. Fine for a university project.
+#   - Its Hugging Face repo is GATED with automatic approval: open
+#     https://huggingface.co/guymandude/South-African-TTS-11-Vits once,
+#     accept the terms, and set HF_TOKEN in .env. Without that every fetch
+#     returns 403 and the seven languages stay text-only.
+#   - Its model card is an empty template. There is no published
+#     evaluation, so listen to it before you demo it.
+#
+# Needs `pip install coqui-tts`, and downloads ~150 MB on first use.
+enable_coqui_sa = false
+
 [speech.local_voices]
 # VITS checkpoints this project trained itself, by language. Point each
 # at a directory containing the model; a path that does not exist is

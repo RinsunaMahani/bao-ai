@@ -242,3 +242,81 @@ def test_edge_voices_are_preferred_where_microsoft_has_the_locale():
     """
     for language in ("Amharic", "French", "Somali", "Swahili"):
         assert select_backend(language, "auto") == "edge", language
+
+
+# --- The multilingual South African VITS model ---------------------------
+
+
+@pytest.fixture
+def coqui_on(monkeypatch):
+    """Pretends coqui-tts is installed and the model is switched on.
+
+    The real thing needs a gated 150 MB download, so what is testable here
+    is the routing: which languages it claims, and which it must not take
+    from a better voice. Audio quality is not testable anywhere in this
+    suite and is not claimed to be.
+    """
+    monkeypatch.setattr(speech_module, "_HAS_COQUI_BACKEND", True)
+    monkeypatch.setattr(speech_module, "_COQUI_ENABLED", True)
+
+
+def test_it_is_off_unless_configured():
+    """Off by default for a licence reason, not a technical one: the model
+    is cc-by-nc-4.0 and this repository is MIT, so turning it on makes a
+    deployment non-commercial. That is a choice someone has to make.
+    """
+    from bao.core.config import Settings
+
+    assert Settings().coqui_sa_enabled is False
+    assert speech_module.has_coqui_backend() is False
+
+
+def test_asking_for_it_without_the_library_leaves_it_off(monkeypatch):
+    """A switch that reports success while doing nothing is the failure
+    this project keeps finding. Enabling without coqui-tts installed must
+    return False, not True.
+    """
+    monkeypatch.setattr(speech_module, "_HAS_COQUI_BACKEND", False)
+    monkeypatch.setattr(speech_module, "_COQUI_ENABLED", False)
+    assert speech_module.enable_coqui_sa(True) is False
+    assert speech_module.has_coqui_backend() is False
+
+
+@pytest.mark.parametrize("language", [
+    "isiXhosa", "Sesotho", "Setswana", "Sepedi", "Tshivenda", "siSwati", "isiNdebele",
+])
+def test_it_covers_exactly_the_languages_nothing_else_reaches(coqui_on, language):
+    """These seven are the whole reason for the model: edge-tts has three
+    South African locales, MMS has one, and this has all eleven.
+    """
+    spoken, note = resolve_voice_language(language)
+    assert spoken == language
+    assert note is None, "a voice in the user's own language needs no apology"
+    assert select_backend(language, "auto") == "coqui"
+
+
+@pytest.mark.parametrize("language", ["English", "Afrikaans", "isiZulu"])
+def test_it_does_not_displace_microsofts_voices(coqui_on, language):
+    """Microsoft's neural voices are better than a community NCHLT model
+    for the three languages both cover. The model's job is the seven
+    neither covers, not every language it happens to list.
+    """
+    assert select_backend(language, "auto") == "edge"
+
+
+def test_it_outranks_borrowing_a_related_languages_voice(coqui_on):
+    """isiXhosa was spoken with the isiZulu voice, which is Nguni and
+    shares the click letters but is still a different language being
+    mispronounced. A real isiXhosa voice must win, and must do so without
+    the disclosure note a substitution carries.
+    """
+    borrowed, note = resolve_voice_language("isiXhosa", allow_related=True)
+    assert borrowed == "isiXhosa", "an own-language voice beats a borrowed one"
+    assert note is None
+
+
+def test_xitsonga_keeps_its_verified_mms_voice(coqui_on):
+    """Xitsonga is the one South African language with a real MMS repo.
+    A verified voice is not replaced by an unevaluated one.
+    """
+    assert select_backend("Xitsonga", "auto") == "mms"

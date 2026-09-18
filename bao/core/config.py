@@ -192,6 +192,31 @@ class Settings:
         return self._raw.get("model", {}).get("min_detection_confidence", 0.5)
 
     @property
+    def coqui_sa_enabled(self) -> bool:
+        """The multilingual South African VITS model. OFF by default.
+
+        It is the only model found that speaks all eleven, and it closes
+        the exact gap edge-tts and MMS leave — but three things make it a
+        decision rather than a default:
+
+          - It is cc-by-nc-4.0. This repository is MIT, so the model is
+            fetched at runtime and never vendored; turning this on makes
+            the resulting deployment non-commercial. Fine for an academic
+            project, not fine for a product.
+          - Its Hugging Face repo is gated. Approval is automatic, but the
+            terms must be accepted once at the model page with HF_TOKEN
+            set, or every fetch returns 403.
+          - Its model card is an unfilled template — no training details,
+            no evaluation, no named author. Nothing can tell you how it
+            sounds except listening to it.
+
+        Defaulting this on would make an MIT project quietly depend on a
+        non-commercial model, which is the kind of thing that should never
+        happen without someone choosing it.
+        """
+        return self._raw.get("speech", {}).get("enable_coqui_sa", False)
+
+    @property
     def local_voices(self) -> dict[str, str]:
         """VITS checkpoints this project trained itself, by language name.
 

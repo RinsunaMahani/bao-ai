@@ -60,6 +60,11 @@ speech = [
 # convert_model.py or tests/test_tokenizer_parity.py, both of which need
 # Keras itself.
 ml = ["ai-edge-litert>=1.0.0"]
+# The multilingual South African VITS model. A separate extra, not part of
+# `speech`, because the MODEL it loads is cc-by-nc-4.0 while this project
+# is MIT: installing it must be a deliberate act, not something that
+# arrives with the voice extras.
+coqui = ["coqui-tts>=0.27.0"]
 pdf = ["pypdf>=4.0.0"]
 # Mirrors requirements-semantic.txt — the alternative retrieval backend
 # that compare_retrievers.py scores against TF-IDF.

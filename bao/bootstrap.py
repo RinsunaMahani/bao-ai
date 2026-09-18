@@ -35,7 +35,7 @@ from bao.services.language_detector import (
     SklearnLanguageDetector,
     get_language_detector,
 )
-from bao.services.speech import load_local_voices
+from bao.services.speech import enable_coqui_sa, load_local_voices
 
 logger = get_logger(__name__)
 
@@ -66,6 +66,12 @@ def build_orchestrator(
     # speech module rather than passed down the graph because voice
     # coverage is a property of the machine, not of one orchestrator.
     load_local_voices(settings.local_voices)
+
+    # Opt-in, and for a licence reason rather than a technical one: the
+    # model is cc-by-nc-4.0 and this repository is MIT. See
+    # Settings.coqui_sa_enabled. Registered here so the voice tiers know
+    # about it before anything asks what can be spoken.
+    enable_coqui_sa(settings.coqui_sa_enabled)
 
     knowledge_retriever = (
         KnowledgeRetriever(
