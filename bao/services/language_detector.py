@@ -488,14 +488,61 @@ class CompositeLanguageDetector(LanguageDetector):
     their probabilities are not comparable. Measured on the shipped
     pan-African model:
 
-        South African / English input  ->  16-23% confidence (wrong label)
-        genuine pan-African input      ->  37-95% confidence (right label)
+        South African / English input  ->  13-44% confidence (wrong label)
+        genuine pan-African input      ->  43-89% confidence (right label)
 
-    So a secondary answer is only accepted above `secondary_min`, which
-    sits above everything observed in the first group and below everything
-    observed in the second. That margin comes from eleven probe inputs, not
-    a held-out set — it is deliberately conservative, and erring means
-    falling back to today's behaviour rather than guessing.
+    So a secondary answer is only accepted above a threshold that sits
+    above the first group and below the second, rather than by comparing
+    the two numbers directly.
+
+    TWO THRESHOLDS, because one is not enough — and this corrects a rule
+    that was wrong for a measurable reason rather than a debatable one.
+
+    The original design consulted the secondary ONLY when the primary fell
+    below `primary_min`, on the assumption that a classifier is unsure
+    about input that is not in its languages. That assumption is false. The
+    primary is an 11-class softmax with no "none of the above" output, so
+    out-of-distribution input does not make it hesitate — it makes it pick
+    the nearest of its eleven, confidently. Measured on one sentence per
+    language (scripts/probe_language_routing.py):
+
+        Luganda  -> Xitsonga  100%        Hausa           -> English  97%
+        Yoruba   -> Xitsonga   99%        Nigerian Pidgin -> English  85%
+        Igbo     -> isiZulu    64%        French          -> isiNdebele 63%
+
+    Every one of those clears `primary_min`, so the secondary was never
+    asked, and seven of the fourteen languages were answered in a language
+    the user had not written in. The gate was reading the wrong signal:
+    primary confidence says nothing about whether the input is
+    South African, while secondary confidence does.
+
+    So `secondary_strong` (0.5) accepts a strong secondary answer outright,
+    even over a confident primary. `secondary_min` (0.35) keeps the
+    original, more cautious path for a moderate secondary answer, which is
+    still only taken when the primary is itself unsure.
+
+    Evidence for 0.5, from 24 South African inputs (11 sentences and the 13
+    single-word probes in tests/test_pan_african.py) and 14 pan-African
+    sentences:
+
+        highest secondary confidence on ANY South African input   44%
+        lowest secondary confidence where it was RIGHT             43%
+
+    0.5 clears the first with margin. The 44% case is English read as
+    Nigerian Pidgin, which is the one genuinely hard pair here — Nigerian
+    Pidgin is English-lexifier, so it is confusable with English by
+    construction rather than by accident, and keeping English is the right
+    way to resolve it for this app.
+
+    Known cost, stated rather than hidden: Luganda scores 43% and so falls
+    below the bar, leaving it detected as Xitsonga. Admitting it would mean
+    dropping the threshold under English's 44% and relabelling English as
+    Nigerian Pidgin, which is a worse trade for an app whose lingua franca
+    is English. 24 of 25 languages route correctly.
+
+    These figures come from one sentence per language, not a held-out set.
+    They are enough to show the old rule was wrong and to choose between
+    two candidate thresholds; they are not a calibration claim.
     """
 
     def __init__(
@@ -504,12 +551,14 @@ class CompositeLanguageDetector(LanguageDetector):
         secondary: LanguageDetector,
         primary_min: float = 0.5,
         secondary_min: float = 0.35,
+        secondary_strong: float = 0.5,
         enabled: bool = True,
     ):
         self.primary = primary
         self.secondary = secondary
         self.primary_min = primary_min
         self.secondary_min = secondary_min
+        self.secondary_strong = secondary_strong
         # Flippable at runtime so the UI can offer a toggle. The alternative
         # — rebuilding the pipeline when the setting changes — would mean
         # invalidating Streamlit's @st.cache_resource and reloading the
@@ -523,10 +572,28 @@ class CompositeLanguageDetector(LanguageDetector):
         result = self.primary.detect(text)
         if not self.enabled:
             return result
+
+        # Asked unconditionally. Gating this call on the primary being
+        # unsure is what hid seven languages: the primary is confidently
+        # wrong on input outside its eleven, so it never asked.
+        fallback = self.secondary.detect(text)
+
+        # A strong secondary answer is evidence the input is not South
+        # African at all, which is a claim the primary cannot make about
+        # itself. It therefore outranks a confident primary.
+        if fallback.confidence >= self.secondary_strong:
+            if result.confidence >= self.primary_min:
+                logger.info(
+                    f"Primary confident ({result.language} {result.confidence:.2f}) but "
+                    f"pan-African model is stronger ({fallback.language} "
+                    f"{fallback.confidence:.2f}); taking the pan-African answer."
+                )
+            return fallback
+
+        # Below that, the cautious original path: a moderate secondary
+        # answer is only taken when the primary is unsure too.
         if result.confidence >= self.primary_min:
             return result
-
-        fallback = self.secondary.detect(text)
         if fallback.confidence < self.secondary_min:
             return result
 

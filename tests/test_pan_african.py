@@ -15,6 +15,7 @@ from bao.services.language_detector import (
     DetectionResult,
     HeuristicLanguageDetector,
     SklearnLanguageDetector,
+    get_language_detector,
 )
 
 # Trigger words for all eleven South African languages. If enabling the
@@ -84,15 +85,59 @@ def test_toggling_the_composite_changes_nothing_else():
 # --- The composite's arbitration rule -----------------------------------
 
 
-def test_confident_primary_is_never_overruled(monkeypatch):
-    """The eleven-language model is the authority for its own domain. A
-    secondary answer must not displace a confident primary one, however
-    sure the secondary sounds.
+def test_confident_primary_beats_a_MODERATE_secondary(monkeypatch):
+    """The eleven-language model is the authority for its own domain, so a
+    middling secondary answer must not displace a confident primary one.
+
+    This is the half of the original rule that survived measurement. The
+    other half did not - see the test below.
     """
     composite = CompositeLanguageDetector(
-        primary=_Stub("isiZulu", 0.75), secondary=_Stub("swa", 0.99)
+        primary=_Stub("isiZulu", 0.75), secondary=_Stub("swa", 0.45)
     )
     assert composite.detect("sawubona").language == "isiZulu"
+
+
+def test_confident_primary_IS_overruled_by_a_strong_secondary():
+    """The rule this replaces said a confident primary is never overruled.
+    That was wrong, and measurably so.
+
+    The primary is an 11-class softmax with no "none of the above" output.
+    Input in a language it was never trained on does not make it hesitate;
+    it makes it pick the nearest of its eleven and report high confidence.
+    Measured, one sentence per language:
+
+        Luganda -> Xitsonga 100%     Yoruba -> Xitsonga 99%
+        Hausa   -> English   97%     Nigerian Pidgin -> English 85%
+
+    Every one of those cleared primary_min, so the secondary was never
+    consulted and seven of the fourteen languages were answered in a
+    language the user had not written in. Primary confidence simply does
+    not carry the information the gate needed.
+
+    Secondary confidence does: across 24 South African inputs it never
+    exceeds 44%, and where it is right about a pan-African language it
+    scores 43-89%. So a secondary above secondary_strong outranks the
+    primary however sure the primary sounds.
+    """
+    composite = CompositeLanguageDetector(
+        primary=_Stub("Xitsonga", 1.00), secondary=_Stub("lug", 0.87)
+    )
+    assert composite.detect("some luganda text").language == "lug"
+
+
+def test_south_african_input_never_trips_the_strong_secondary_rule():
+    """The safety property the new rule has to keep.
+
+    44% is the highest the pan-African model scored on ANY South African
+    input tested - English read as Nigerian Pidgin, the one genuinely
+    confusable pair, since Nigerian Pidgin is English-lexifier. The
+    threshold sits above it so English stays English.
+    """
+    composite = CompositeLanguageDetector(
+        primary=_Stub("English", 0.99), secondary=_Stub("pcm", 0.44)
+    )
+    assert composite.detect("hello how can you help me").language == "English"
 
 
 def test_unsure_primary_defers_to_a_confident_secondary():
@@ -228,3 +273,63 @@ def test_every_bundle_label_has_a_display_name():
     labels = joblib.load(settings.pan_african_model_path)["labels"]
     missing = [c for c in labels if c not in PAN_AFRICAN_LANGUAGE_NAMES]
     assert not missing, f"no display name for: {missing}"
+
+
+# --- The seven languages the old gate hid --------------------------------
+
+# Full sentences, because the primary is an LSTM trained on NCHLT news
+# sentences. Kept alongside scripts/probe_language_routing.py, which walks
+# the same inputs through the whole orchestrator; these pin the detection
+# half in CI, where building an orchestrator per language is too slow.
+_PREVIOUSLY_MISROUTED = [
+    ("French", "Bonjour, pouvez-vous m'aider à trouver des informations sur la santé."),
+    ("Hausa", "Sannu, ina neman taimako game da harkokin lafiya a yankinmu."),
+    ("Igbo", "Ndewo, biko nyere m aka banyere ozi gbasara ahụike na obodo anyị."),
+    ("Nigerian Pidgin", "How you dey, abeg I wan know about health care for our area."),
+    ("Swahili", "Habari yako, naomba msaada kuhusu huduma za afya katika eneo letu."),
+    ("Yoruba", "Bawo ni, jọwọ ran mi lọwọ nipa alaye nipa ilera ni agbegbe wa."),
+]
+
+
+@pytest.mark.parametrize("expected,text", _PREVIOUSLY_MISROUTED)
+def test_languages_hidden_by_the_old_primary_gate_are_detected(expected, text):
+    """Each of these was answered in a South African language.
+
+    The primary was confidently wrong on all of them - Yoruba read as
+    Xitsonga at 99%, Hausa as English at 97% - so it never fell below
+    primary_min and the pan-African model was never consulted. The bug was
+    not that the secondary was inaccurate; it was right about 14 of 14. The
+    bug was that it was not asked.
+    """
+    settings = Settings()
+    pan = SklearnLanguageDetector(settings.pan_african_model_path)
+    if not pan.is_available():
+        pytest.skip("no pan-African bundle present")
+    primary = get_language_detector(
+        prefer_ml=True,
+        model_path=settings.classifier_model_path,
+        tokenizer_config_path=settings.tokenizer_config_path,
+    )
+    composite = CompositeLanguageDetector(primary=primary, secondary=pan)
+    assert composite.detect(text).language == expected
+
+
+def test_luganda_is_a_known_miss_and_stays_documented():
+    """Luganda scores 43%, just under the 44% ceiling that English hits as
+    Nigerian Pidgin. Admitting it means relabelling English, which is the
+    worse trade for an app whose lingua franca is English.
+
+    Pinned as a KNOWN miss rather than left silent, so that if a better
+    bundle ever lifts it above the bar this test fails and says so - a
+    limitation that stops being true should not go unnoticed.
+    """
+    settings = Settings()
+    pan = SklearnLanguageDetector(settings.pan_african_model_path)
+    if not pan.is_available():
+        pytest.skip("no pan-African bundle present")
+    result = pan.detect("Oli otya, nsaba obuyambi ku bikwata ku by'obulamu mu kitundu kyaffe.")
+    assert result.language == "Luganda", "the secondary identifies it correctly"
+    assert result.confidence < 0.5, (
+        "Luganda now clears secondary_strong - remove it from the known-miss "
+        "list in the CompositeLanguageDetector docstring and from this test"
+    )
