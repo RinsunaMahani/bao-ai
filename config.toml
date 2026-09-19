@@ -13,6 +13,12 @@ enable_pan_african = true
 # A weak guess otherwise produces an answer in the wrong language, not
 # merely a wrong badge. Measured live: correct at 64%+, wrong at 35-42%.
 min_detection_confidence = 0.5
+# Gemini answers 503 UNAVAILABLE ("this model is currently experiencing
+# high demand") under load and 429 when rate-limited. Both mean "not now",
+# not "not ever" — the same request usually succeeds straight after. Retry
+# so one spike does not cost the user their turn. Backoff is a fraction of
+# a second, so 3 attempts add about a second in the worst case. 1 = off.
+generation_max_attempts = 3
 
 [retrieval]
 default_similarity_threshold = 0.25

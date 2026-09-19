@@ -446,6 +446,14 @@ Stated here so they are read rather than discovered.
   as Nigerian Pidgin. Admitting Luganda would mean relabelling English, so
   24 of 25 languages route correctly and this one does not. Reproduce with
   `python scripts/probe_language_routing.py`.
+- **The Gemini free tier allows 5 requests per minute** on
+  `gemini-3.6-flash`, and a knowledge-base fact translated into another
+  language costs a request of its own. A demo that asks six questions in a
+  minute will be rate-limited on the sixth. The app reports this as a quota
+  message carrying the provider's own wait time rather than as a failure,
+  and does not retry a wait it has been told is long — quick retries would
+  spend more of the same quota. Transient 503s (the model being busy) *are*
+  retried, up to `[model].generation_max_attempts`.
 - **The 0.98 macro F1 is the original training-corpus evaluation.** This
   project independently validated the *deployed* inference path (20/20
   across three small probe sets), which is not the same claim.

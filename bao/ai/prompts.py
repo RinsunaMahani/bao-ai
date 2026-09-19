@@ -92,6 +92,30 @@ OFFLINE_NO_MATCH_MESSAGE = (
     "I'm currently offline and don't have a verified local answer for that yet."
 )
 
+GENERATION_BUSY_MESSAGE = (
+    "The language model is busy right now — that's on their side, not yours. "
+    "Please send that again in a moment."
+)
+
+
+def generation_busy_message(retry_after: float | None = None) -> str:
+    """The busy message, with the provider's own wait when it gave one.
+
+    Worth carrying through rather than always saying "in a moment": the
+    free tier allows five requests a minute and asks for roughly thirteen
+    seconds, so "a moment" invites an immediate retry that fails again and
+    spends more of the quota. A number tells the user how long to actually
+    leave it.
+    """
+    if retry_after is None:
+        return GENERATION_BUSY_MESSAGE
+    seconds = max(1, round(retry_after))
+    return (
+        "The language model is rate-limited right now — that's a quota on "
+        f"their side, not a problem with your question. Try again in about "
+        f"{seconds} second{'s' if seconds != 1 else ''}."
+    )
+
 GENERATION_ERROR_MESSAGE = (
     "I ran into a problem generating a response just now. Please try again in a moment."
 )

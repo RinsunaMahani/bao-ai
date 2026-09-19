@@ -105,6 +105,23 @@ class Settings:
         return self._raw.get("model", {}).get("gemini_model", GEMINI_MODEL_DEFAULT)
 
     @property
+    def generation_max_attempts(self) -> int:
+        """How many times to try a generation call before giving up.
+
+        Gemini returns 503 UNAVAILABLE ("this model is currently
+        experiencing high demand") under load, and 429 when rate-limited.
+        Both are the provider saying "not now", not "not ever" — the same
+        request typically succeeds immediately afterwards. Without a retry
+        a single spike costs the user their whole turn.
+
+        3 rather than more because someone is watching a spinner: the
+        backoff is a fraction of a second, so the worst case adds about a
+        second, while a longer ladder would make a genuine outage feel like
+        a hang. 1 disables retrying.
+        """
+        return int(self._raw.get("model", {}).get("generation_max_attempts", 3))
+
+    @property
     def similarity_threshold(self) -> float:
         return self._raw.get("retrieval", {}).get("default_similarity_threshold", 0.25)
 

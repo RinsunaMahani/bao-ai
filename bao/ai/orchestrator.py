@@ -54,11 +54,16 @@ from bao.ai.prompts import (
     GENERATION_ERROR_MESSAGE,
     OFFLINE_NO_KEY_MESSAGE,
     OFFLINE_NO_MATCH_MESSAGE,
+    generation_busy_message,
     offline_document_excerpt,
     open_ended_prompt,
     system_instruction,
 )
-from bao.core.exceptions import GenerationError, SecurityViolationError
+from bao.core.exceptions import (
+    GenerationError,
+    GenerationUnavailableError,
+    SecurityViolationError,
+)
 from bao.core.logging import get_logger
 from bao.core.security import SecurityGuardrails
 from bao.knowledge.retriever import DocumentRetriever, KnowledgeRetriever
@@ -78,7 +83,9 @@ class PipelineResult:
     # "heuristic" | "tflite" — which detector produced `confidence`, so
     # callers don't present it as calibrated when it isn't.
     detection_backend: str
-    source: str  # "knowledge_base" | "gemini" | "document_context" | "offline_fallback" | "blocked"
+    # "knowledge_base" | "gemini" | "document_context" | "offline_fallback"
+    # | "provider_busy" | "blocked"
+    source: str
     latency_ms: float
     audio: bytes | None = None
     audio_mime: str = "audio/wav"
@@ -458,6 +465,14 @@ class Orchestrator:
                 pieces.append(piece)
                 on_chunk(piece)
             return "".join(pieces), "gemini"
+        except GenerationUnavailableError as e:
+            # The provider was busy or rate-limiting, and retrying inside
+            # the client did not clear it. Told apart from a real failure
+            # because the fix is different: this one is "send it again",
+            # and saying "I ran into a problem" instead invites the user to
+            # rewrite a question that was never the problem.
+            logger.warning(f"Generation unavailable after retries: {e}")
+            return generation_busy_message(e.retry_after), "provider_busy"
         except GenerationError as e:
             logger.error(f"Generation failed: {e}")
             return GENERATION_ERROR_MESSAGE, "offline_fallback"
