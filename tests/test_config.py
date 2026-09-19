@@ -31,3 +31,30 @@ def test_default_mms_and_stt_codes_also_cover_every_label():
 
     assert all(lang in DEFAULT_MMS_CODES for lang in LABELS)
     assert all(lang in DEFAULT_STT_CODES for lang in LABELS)
+
+
+def test_english_maps_to_a_voice_that_exists():
+    """DEFAULT_MMS_CODES mapped English to "afr" to give it a local accent
+    by routing English through Afrikaans letter-to-sound rules.
+
+    facebook/mms-tts-afr does not exist, so that mapping silently removed
+    English from the offline path entirely. config.toml was corrected and
+    this default was not, which left every caller that does not pass an
+    explicit table - and any install without a config.toml - fetching a
+    404 and getting no audio.
+    """
+    from bao.core.config import DEFAULT_MMS_CODES
+    from bao.services.speech import _KNOWN_MMS_VOICES
+
+    assert DEFAULT_MMS_CODES["English"] == "eng"
+    assert DEFAULT_MMS_CODES["English"] in _KNOWN_MMS_VOICES
+
+
+def test_the_shipped_config_and_the_code_default_agree_on_english():
+    """The two drifted once and nothing noticed. A mismatch here means one
+    of them is wrong and the app behaves differently depending on whether
+    config.toml is present.
+    """
+    from bao.core.config import DEFAULT_MMS_CODES, Settings
+
+    assert Settings().mms_codes["English"] == DEFAULT_MMS_CODES["English"]

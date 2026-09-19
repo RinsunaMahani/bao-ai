@@ -621,7 +621,49 @@ def get_language_detector(prefer_ml: bool = False, model_path: str | None = None
     """
     if prefer_ml and model_path and has_tflite_support(model_path):
         try:
-            return TFLiteLanguageDetector(model_path, fallback_keras_path, tokenizer_config_path)
+            ml = TFLiteLanguageDetector(model_path, fallback_keras_path, tokenizer_config_path)
         except Exception as e:
             logger.warning(f"Falling back to heuristic detector: {e}")
+            return HeuristicLanguageDetector()
+
+        # The heuristic is kept as a RUNTIME fallback, not merely a
+        # load-time one, because the two fail on opposite inputs.
+        #
+        # The classifier is word-level over a 25,000-word vocabulary built
+        # from NCHLT news sentences. A single greeting is not in it, so the
+        # tokenizer emits nothing but OOV markers and the model returns its
+        # prior — the same answer for every such input. Measured: nine
+        # different greetings across eight languages ("Sawubona", "Molo",
+        # "Avuxeni", "Thobela", "Lumela", "Ndaa", "Lotjhani", "Goeiedag",
+        # "Hello") ALL came back as siSwati at exactly 35%. That is not a
+        # detection, it is a constant, and the confidence floor then
+        # correctly refused to act on it — so greetings, which is what
+        # people actually open a conversation with, were all answered in
+        # English.
+        #
+        # Those same words are precisely what the keyword map contains, and
+        # it gets all nine right. So: the model leads on anything it can
+        # read, and the keyword list answers the short input it cannot.
+        #
+        # Thresholds are deliberate, not inherited:
+        #
+        #   secondary_strong is unreachable (1.01). A marker word must
+        #   never overrule a confident model. "Kan jy my help" is Afrikaans
+        #   at 100%, but "help" appears in both the Afrikaans and English
+        #   keyword lists and the English baseline tips it to English at
+        #   90% — allowing a strong-secondary override would turn a correct
+        #   answer into a wrong one.
+        #
+        #   secondary_min is 0.5, which sits above the keyword detector's
+        #   no-match scores (0.05, or 0.20 for its slight English baseline)
+        #   and below a real marker-word hit (0.75). So it is consulted
+        #   only when it actually recognised a word, never when it is
+        #   guessing.
+        return CompositeLanguageDetector(
+            primary=ml,
+            secondary=HeuristicLanguageDetector(),
+            primary_min=0.5,
+            secondary_min=0.5,
+            secondary_strong=1.01,
+        )
     return HeuristicLanguageDetector()

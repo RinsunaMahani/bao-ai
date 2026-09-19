@@ -140,14 +140,20 @@ class TestTFLiteLanguageDetector:
         have let a Keras fallback satisfy them falsely, quietly defeating
         the whole point of that check.
         """
-        from bao.services.language_detector import get_language_detector
+        from bao.services.language_detector import TFLiteLanguageDetector
 
-        detector = get_language_detector(
-            prefer_ml=True, model_path=_settings.classifier_model_path,
+        # Built directly rather than through get_language_detector, which
+        # now returns a composite that answers short input from the keyword
+        # map — see test_the_factory_pairs_the_model_with_the_keyword_map.
+        # This test is about what the TFLite detector reports about itself.
+        detector = TFLiteLanguageDetector(
+            _settings.classifier_model_path,
             tokenizer_config_path=_settings.tokenizer_config_path,
         )
         assert detector.is_tflite is True
-        assert detector.detect("hello there").backend == "tflite"
+        assert detector.detect(
+            "Ngicela ungisize ngolwazi mayelana nezempilo zomphakathi."
+        ).backend == "tflite"
 
     def test_backend_string_follows_is_tflite_flag(self):
         """Directly exercises the reporting logic for the Keras-fallback
@@ -156,10 +162,10 @@ class TestTFLiteLanguageDetector:
         backend follows it. If someone reverts to a hardcoded string, this
         fails.
         """
-        from bao.services.language_detector import get_language_detector
+        from bao.services.language_detector import TFLiteLanguageDetector
 
-        detector = get_language_detector(
-            prefer_ml=True, model_path=_settings.classifier_model_path,
+        detector = TFLiteLanguageDetector(
+            _settings.classifier_model_path,
             tokenizer_config_path=_settings.tokenizer_config_path,
         )
         original = detector.is_tflite
@@ -224,3 +230,59 @@ class TestTFLiteLanguageDetector:
         result = detector.detect("Dumela, nka thusha bjang ka system e?")
         assert result.backend == "tflite", f"Detector silently fell back to '{result.backend}'"
         assert result.language == "Sepedi"
+
+
+def test_the_factory_pairs_the_model_with_the_keyword_map():
+    """A greeting must be answered in the language it was typed in.
+
+    The classifier is word-level over a 25,000-word NCHLT vocabulary, so a
+    single greeting is entirely out of vocabulary: the tokenizer emits only
+    OOV markers and the model returns its prior. Measured before this was
+    fixed, nine greetings across eight languages - "Sawubona", "Molo",
+    "Avuxeni", "Thobela", "Lumela", "Ndaa", "Lotjhani", "Goeiedag" and
+    "Hello" - ALL came back as siSwati at exactly 35%. A constant, not a
+    detection. The confidence floor then correctly declined to act on it,
+    so every greeting was answered in English, which is what people open a
+    conversation with.
+
+    The keyword map contains exactly those words. So the factory pairs
+    them: the model leads on anything it can read, the keyword list answers
+    what it cannot.
+    """
+    from bao.services.language_detector import get_language_detector
+
+    detector = get_language_detector(
+        prefer_ml=True, model_path=_settings.classifier_model_path,
+        tokenizer_config_path=_settings.tokenizer_config_path,
+    )
+    if not _tflite_available:
+        pytest.skip("TFLite detector unavailable; the factory returns the heuristic alone")
+
+    for text, expected in [
+        ("Sawubona", "isiZulu"), ("Molo", "isiXhosa"), ("Avuxeni", "Xitsonga"),
+        ("Thobela", "Sepedi"), ("Ndaa", "Tshivenda"), ("Lotjhani", "isiNdebele"),
+        ("Goeiedag", "Afrikaans"),
+    ]:
+        assert detector.detect(text).language == expected, f"{text!r} regressed"
+
+
+def test_a_marker_word_never_overrules_a_confident_model():
+    """The guard that makes the pairing safe.
+
+    "Kan jy my help" is Afrikaans, and the model says so at 100%. But
+    "help" is in BOTH the Afrikaans and English keyword lists, and the
+    keyword detector's slight English baseline tips it to English at 90%.
+    Letting a strong keyword score win would turn a correct answer into a
+    wrong one, so the keyword map is consulted only when the model is
+    unsure - never to overrule it.
+    """
+    from bao.services.language_detector import get_language_detector
+
+    detector = get_language_detector(
+        prefer_ml=True, model_path=_settings.classifier_model_path,
+        tokenizer_config_path=_settings.tokenizer_config_path,
+    )
+    if not _tflite_available:
+        pytest.skip("TFLite detector unavailable")
+
+    assert detector.detect("Kan jy my help om my identiteitsdokument te kry.").language == "Afrikaans"

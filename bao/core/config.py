@@ -35,9 +35,19 @@ LABELS = [
     "Setswana", "Sepedi", "Xitsonga", "Tshivenda", "siSwati", "isiNdebele",
 ]
 
-# Fallback voice codes (routes English through SA phonetic weights)
+# Offline MMS voice codes. Of these only "eng" and "tso" resolve on Hugging
+# Face; the rest 404 and are kept as the mapping each language WOULD use,
+# gated at synthesis time by speech._KNOWN_MMS_VOICES.
+#
+# English is "eng", not "afr". It was "afr" to give English a local accent
+# by routing it through Afrikaans letter-to-sound rules — but that repo
+# does not exist either, so the mapping silently removed English from the
+# offline path as well. config.toml was corrected and this default was
+# not, which left every caller that does not pass an explicit table (and
+# any install without a config.toml) trying to fetch mms-tts-afr for
+# English and getting no audio at all.
 DEFAULT_MMS_CODES = {
-    "Afrikaans": "afr", "English": "afr", "isiNdebele": "nbl", "isiXhosa": "xho",
+    "Afrikaans": "afr", "English": "eng", "isiNdebele": "nbl", "isiXhosa": "xho",
     "isiZulu": "zul", "Sepedi": "nso", "Sesotho": "sot", "Setswana": "tsn",
     "siSwati": "ssw", "Tshivenda": "ven", "Xitsonga": "tso",
 }
