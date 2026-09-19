@@ -3,16 +3,27 @@
 [model]
 # Free-tier quotas are PER MODEL — the quota id Google returns is
 # GenerateRequestsPerDayPerProjectPerModel-FreeTier — so switching models
-# gets a fresh daily budget rather than sharing one.
+# gets a fresh daily budget rather than sharing one. Useful when one is
+# exhausted mid-session.
 #
-# gemini-3.6-flash allows only 20 requests PER DAY on the free tier, which
-# is roughly one demo. gemini-3.5-flash-lite is the testing choice: a much
-# higher per-minute allowance and its own untouched daily bucket.
-#
-# Per-minute limits are a rolling window and free up continuously; the
+# Per-minute limits are a rolling window and free up continuously. The
 # per-DAY limit is the one that ends a session, and it resets on Google's
 # schedule (midnight US Pacific), not at local midnight.
-gemini_model = "gemini-3.5-flash-lite"
+#
+# Availability measured on 2026-09-19, 10 calls each:
+#
+#   gemini-3.5-flash       6 ok, 0x 503   <- chosen
+#   gemini-3.7-flash       2 ok, 4x 503
+#   gemini-3.8-flash       1 ok, 5x 503
+#   gemini-3.6-flash       daily quota exhausted (20 requests/day)
+#
+# The newest models are the most congested, which is the opposite of the
+# intuition that newer is better to point at. 3.5-flash also answers the
+# multilingual task well: "explain calculus in xitsonga" came back in
+# real Xitsonga, and gravity in Afrikaans in real Afrikaans, both at 99%+
+# on the reply. gemini-3.5-flash-lite is the lighter fallback if this one
+# runs out — it is more available but weaker at cross-lingual answers.
+gemini_model = "gemini-3.5-flash"
 # Pan-African classifier (14 languages, disjoint from the 11 SA ones).
 # OFF by default: turning it on changes the detection path for EVERY
 # message, not just the new languages. Enable it, run
