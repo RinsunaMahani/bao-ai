@@ -198,6 +198,53 @@ class _KerasWordTokenizer:
         return np.array([padded], dtype=np.float32)
 
 
+_TARGET_LANGUAGE_RE = None
+
+
+def named_target_language(query: str) -> str | None:
+    """The language a question ASKS FOR, as in "explain calculus in
+    Xitsonga" — or None when it names none.
+
+    This is a different question from "what language is this written in",
+    and conflating them is what made cross-lingual requests unreliable. The
+    query above is written in English, so detection correctly reports
+    English, the system instruction then reads "Primary response language:
+    English", and the model weighs that header above the request buried in
+    the sentence. Measured on gemini-3.5-flash-lite: "explain gravity in
+    Afrikaans" came back in English on both attempts, and "in xitsonga"
+    came back in English then in something closer to Afrikaans.
+
+    The user stated their language explicitly. That should outrank a guess
+    about the language they happened to type the request in.
+
+    Deliberately narrow: it requires the preposition immediately before a
+    known language name, so "how many official languages does South Africa
+    have" is unaffected. Matching is case-insensitive because people type
+    "xitsonga" and "Xitsonga" interchangeably.
+    """
+    global _TARGET_LANGUAGE_RE
+    if _TARGET_LANGUAGE_RE is None:
+        from bao.core.config import LABELS, PAN_AFRICAN_LABELS
+
+        # Longest first, so "Nigerian Pidgin" is not shadowed by a shorter
+        # name that happens to be a prefix of it.
+        names = sorted(LABELS + PAN_AFRICAN_LABELS, key=len, reverse=True)
+        pattern = "|".join(re.escape(n.lower()) for n in names)
+        _TARGET_LANGUAGE_RE = re.compile(rf"\bin\s+({pattern})\b", re.IGNORECASE)
+
+    match = _TARGET_LANGUAGE_RE.search(query)
+    if not match:
+        return None
+
+    from bao.core.config import LABELS, PAN_AFRICAN_LABELS
+
+    found = match.group(1).lower()
+    for name in LABELS + PAN_AFRICAN_LABELS:
+        if name.lower() == found:
+            return name
+    return None
+
+
 class LanguageDetector(ABC):
     @abstractmethod
     def detect(self, text: str) -> DetectionResult: ...

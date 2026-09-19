@@ -331,12 +331,15 @@ class KnowledgeRetriever:
         a known language name, so "how many official languages does South
         Africa have" is unaffected.
         """
-        if cls._TARGET_LANGUAGE_RE is None:
-            from bao.core.config import LABELS
+        from bao.services.language_detector import named_target_language
 
-            names = "|".join(re.escape(name.lower()) for name in LABELS)
-            cls._TARGET_LANGUAGE_RE = re.compile(rf"\bin\s+({names})\b")
-        return bool(cls._TARGET_LANGUAGE_RE.search(query.lower()))
+        # Shared with the orchestrator, which applies the same rule to
+        # decide what language to ANSWER in. Two copies of "does this name
+        # a language" could disagree about one sentence, and then the
+        # knowledge base and the reply language would be reading the same
+        # question differently. It also widens this to the pan-African
+        # names, which the local copy never knew about.
+        return named_target_language(query) is not None
 
     def lookup(self, query: str, prefer_language: str | None = None) -> KnowledgeFact | None:
         """Finds a curated answer, preferring one written in the language

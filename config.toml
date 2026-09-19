@@ -1,7 +1,18 @@
 # Bao AI Assistant Configuration
 
 [model]
-gemini_model = "gemini-3.6-flash"
+# Free-tier quotas are PER MODEL — the quota id Google returns is
+# GenerateRequestsPerDayPerProjectPerModel-FreeTier — so switching models
+# gets a fresh daily budget rather than sharing one.
+#
+# gemini-3.6-flash allows only 20 requests PER DAY on the free tier, which
+# is roughly one demo. gemini-3.5-flash-lite is the testing choice: a much
+# higher per-minute allowance and its own untouched daily bucket.
+#
+# Per-minute limits are a rolling window and free up continuously; the
+# per-DAY limit is the one that ends a session, and it resets on Google's
+# schedule (midnight US Pacific), not at local midnight.
+gemini_model = "gemini-3.5-flash-lite"
 # Pan-African classifier (14 languages, disjoint from the 11 SA ones).
 # OFF by default: turning it on changes the detection path for EVERY
 # message, not just the new languages. Enable it, run

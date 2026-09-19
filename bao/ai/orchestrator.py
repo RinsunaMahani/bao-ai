@@ -67,7 +67,11 @@ from bao.core.exceptions import (
 from bao.core.logging import get_logger
 from bao.core.security import SecurityGuardrails
 from bao.knowledge.retriever import DocumentRetriever, KnowledgeRetriever
-from bao.services.language_detector import DetectionResult, LanguageDetector
+from bao.services.language_detector import (
+    DetectionResult,
+    LanguageDetector,
+    named_target_language,
+)
 from bao.services.offline import should_use_offline
 from bao.services.speech import resolve_voice_language, synthesize_speech
 from bao.services.translation import translate_fact
@@ -245,6 +249,28 @@ class Orchestrator:
                 f"{detection.confidence:.0%}); replying in English."
             )
             reply_language = "English"
+
+        # An explicitly named language outranks everything above it.
+        #
+        # "explain calculus in Xitsonga" is WRITTEN in English, so detection
+        # correctly says English and the system instruction then reads
+        # "Primary response language: English" — and the model obeys that
+        # header over the request inside the sentence. Measured on
+        # gemini-3.5-flash-lite: "explain gravity in Afrikaans" came back in
+        # English on both attempts. It is not a detection failure; detection
+        # was right. The pipeline was answering a different question from
+        # the one asked.
+        #
+        # Skipped when the caller pinned the language, since an explicit
+        # override is a stronger statement than a phrase in the text.
+        if not language_override:
+            requested = named_target_language(user_input)
+            if requested and requested != reply_language:
+                logger.info(
+                    f"Question asks for {requested}; answering in it rather than "
+                    f"{reply_language}."
+                )
+                reply_language = requested
 
         # 3. Knowledge retrieval (verified facts first, then session documents)
         #

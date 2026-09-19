@@ -5,7 +5,7 @@ from bao.ai.orchestrator import Orchestrator
 from bao.core.config import Settings
 from bao.core.security import SecurityGuardrails
 from bao.knowledge.retriever import DocumentRetriever, KnowledgeRetriever
-from bao.services.language_detector import HeuristicLanguageDetector
+from bao.services.language_detector import DetectionResult, HeuristicLanguageDetector
 
 
 @pytest.fixture
@@ -442,3 +442,111 @@ def test_retrieval_uses_the_reply_language_not_the_raw_detection(orchestrator):
     assert result.reply_language == "English"
     # The English-preferring lookup must not return the siSwati greeting.
     assert "Nginganisita" not in result.text
+
+
+# --- a question that names its own language -----------------------------
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("explain calculus in xitsonga", "Xitsonga"),
+    ("explain gravity in Afrikaans", "Afrikaans"),
+    ("explain photosynthesis in isiZulu", "isiZulu"),
+    ("reply in Swahili please", "Swahili"),
+    ("explain this in Nigerian Pidgin", "Nigerian Pidgin"),
+])
+def test_a_named_language_is_recognised(query, expected):
+    """"What language is this written in" and "what language does it ask
+    for" are different questions, and the pipeline used to answer only the
+    first.
+    """
+    from bao.services.language_detector import named_target_language
+
+    assert named_target_language(query) == expected
+
+
+@pytest.mark.parametrize("query", [
+    "how many official languages does South Africa have",
+    "tell me about life in south africa",
+    "what languages are spoken here",
+])
+def test_ordinary_sentences_are_not_misread_as_requests(query):
+    """Deliberately narrow. It needs the preposition immediately before a
+    known language name, so prose that merely mentions languages, or a
+    place whose name contains one, is untouched.
+    """
+    from bao.services.language_detector import named_target_language
+
+    assert named_target_language(query) is None
+
+
+def test_the_named_language_beats_the_detected_one():
+    """The regression this fixes, without calling the API.
+
+    "explain calculus in Xitsonga" is WRITTEN in English, so detection
+    correctly returns English and the system instruction then reads
+    "Primary response language: English" - which the model obeys over the
+    request inside the sentence. Measured on gemini-3.5-flash-lite:
+    "explain gravity in Afrikaans" came back in English on both attempts.
+    Detection was not wrong; the pipeline was answering a different
+    question from the one asked.
+    """
+    from bao.ai.memory import ConversationMemory
+    from bao.ai.orchestrator import Orchestrator
+    from bao.core.security import SecurityGuardrails
+
+    captured = {}
+
+    class _Client:
+        def is_available(self):
+            return True
+
+        def generate(self, prompt, system_instruction=None, temperature=0.3):
+            captured["instruction"] = system_instruction
+            return "answer"
+
+    class _Detector:
+        def detect(self, text):
+            return DetectionResult(language="English", confidence=0.99, backend="stub")
+
+    orch = Orchestrator(
+        security=SecurityGuardrails(),
+        language_detector=_Detector(),
+        knowledge_retriever=None,
+        gemini_client=_Client(),
+        memory=ConversationMemory(),
+    )
+    result = orch.handle("explain calculus in Xitsonga")
+
+    assert result.detected_language == "English", "detection itself is unchanged"
+    assert result.reply_language == "Xitsonga", "the answer follows what was asked for"
+    assert "Primary response language: Xitsonga" in captured["instruction"]
+
+
+def test_an_explicit_override_still_wins_over_a_named_language():
+    """A caller pinning the language is a stronger statement than a phrase
+    inside the text, so the override must not be quietly overruled.
+    """
+    from bao.ai.memory import ConversationMemory
+    from bao.ai.orchestrator import Orchestrator
+    from bao.core.security import SecurityGuardrails
+
+    class _Client:
+        def is_available(self):
+            return True
+
+        def generate(self, prompt, system_instruction=None, temperature=0.3):
+            return "answer"
+
+    class _Detector:
+        def detect(self, text):
+            return DetectionResult(language="English", confidence=0.99, backend="stub")
+
+    orch = Orchestrator(
+        security=SecurityGuardrails(),
+        language_detector=_Detector(),
+        knowledge_retriever=None,
+        gemini_client=_Client(),
+        memory=ConversationMemory(),
+    )
+    result = orch.handle("explain calculus in Xitsonga", language_override="Sesotho")
+    assert result.reply_language == "Sesotho"
