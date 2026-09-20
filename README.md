@@ -200,6 +200,20 @@ python -m pip install -r requirements-pdf.txt       # PDF document uploads
 python -m pip install -r dev-requirements.txt       # pytest, ruff
 ```
 
+### Check the machine is ready
+
+```bash
+python scripts/preflight.py            # no API calls
+python scripts/preflight.py --online   # also spends one Gemini request
+```
+
+The test suite proves the code is correct on any machine. This proves
+*this* machine is ready — that the Git LFS model files actually
+downloaded, the voices load, the API key still works. Those are what fail
+on the day, and none of them are code bugs, so nothing in the test suite
+would catch them. `WARN` means a feature is unavailable and the app will
+say so; only `FAIL` blocks a demo.
+
 ### Run locally
 
 ```bash
