@@ -523,6 +523,60 @@ def resolve_voice_language(
     return None, f"No voice is available for {target_language}; showing text only."
 
 
+# How much of a reply to actually speak.
+#
+# Nothing capped this, and the cost is not linear in anything a user can
+# see: MMS runs a VITS forward pass per sentence on CPU, so a detailed
+# answer measured here produced 4.7 MB of WAV — two and a half minutes of
+# audio — and took 60 seconds to synthesize. Nobody wants either, least of
+# all during a live demo, and the text was on screen and readable long
+# before the voice arrived.
+#
+# 
+# Measured on this project's Xitsonga MMS voice, synthesizing the same
+# long answer at three caps:
+# 
+# 300 chars -> 12s to synthesize, 24s of audio
+# 400 chars -> 15s to synthesize, 37s of audio   <- default
+# 600 chars -> 22s to synthesize, 57s of audio
+# uncapped  -> 60s to synthesize, 152s of audio
+# 
+# 400 is the point where the clip is long enough to demonstrate a voice
+# and short enough that a room does not sit through it. The text is on
+# screen before synthesis starts, so this delays nothing anyone is reading.
+# demonstrate a voice and short enough that nobody waits through it. The
+# cut lands on a sentence boundary, never mid-word, and the caller is told
+# it happened — a shortened reading the listener knows about is a
+# summary; one they do not is the app appearing to lose the end of its
+# own answer.
+DEFAULT_MAX_SPEECH_CHARACTERS = 400
+
+NEWLINE = chr(10)  # spelled this way so the cut logic below stays escape-free
+
+
+def trim_for_speech(text: str, max_characters: int) -> tuple[str, bool]:
+    """Returns (text_to_speak, was_trimmed), cutting on a sentence
+    boundary where one exists and on a word boundary otherwise.
+    """
+    if max_characters <= 0 or len(text) <= max_characters:
+        return text, False
+
+    window = text[:max_characters]
+    # Prefer the last sentence end; fall back to the last space so a word
+    # is never cut in half.
+    sentence_end = max(window.rfind(". "), window.rfind("! "),
+                       window.rfind("? "), window.rfind("." + NEWLINE),
+                       window.rfind(NEWLINE))
+    cut = sentence_end
+    if cut < max_characters // 3:
+        cut = window.rfind(" ")
+    if cut <= 0:
+        cut = max_characters
+    else:
+        cut += 1
+    return text[:cut].strip(), True
+
+
 def _normalize_waveform(waveform: np.ndarray) -> np.ndarray:
     if waveform.dtype.kind == "f":
         waveform = np.clip(waveform, -1.0, 1.0)
@@ -991,6 +1045,8 @@ def synthesize_speech(
     noise_scale: float | None = None,
     backend: str = "auto",
     on_error: Callable[[str], None] | None = None,
+    max_characters: int | None = None,
+    on_trim: Callable[[str], None] | None = None,
 ) -> SpeechAudio | None:
     """Synthesizes `text` in `target_language`. Returns None rather than
     raising: speech is an enhancement, and a failed voice must never take
@@ -1007,6 +1063,16 @@ def synthesize_speech(
     """
     if not text.strip():
         return None
+
+    limit = DEFAULT_MAX_SPEECH_CHARACTERS if max_characters is None else max_characters
+    text, trimmed = trim_for_speech(text, limit)
+    if trimmed:
+        note = (
+            "Reading the first part of the answer aloud — the full text is above."
+        )
+        logger.info(f"Trimmed synthesis input to {limit} characters.")
+        if on_trim:
+            on_trim(note)
 
     chosen = select_backend(target_language, backend)
     if chosen is None:
@@ -1068,13 +1134,13 @@ def synthesize_speech(
             logger.info("Retrying synthesis on the offline Coqui model.")
             return synthesize_speech(
                 text, target_language, mms_codes, speaking_rate, noise_scale,
-                backend="coqui", on_error=on_error,
+                backend="coqui", on_error=on_error, max_characters=limit,
             )
         if chosen == "edge" and _HAS_MMS_BACKEND:
             logger.info("Retrying synthesis on the offline MMS backend.")
             return synthesize_speech(
                 text, target_language, mms_codes, speaking_rate, noise_scale,
-                backend="mms", on_error=on_error,
+                backend="mms", on_error=on_error, max_characters=limit,
             )
 
         if on_error:

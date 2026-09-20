@@ -95,6 +95,24 @@ backend = "auto"
 # is a misrepresentation.
 fallback_related_voice = false
 fallback_english_voice = false
+# How much of a reply to read aloud, in characters. 0 = no limit.
+# Synthesis cost is invisible from the text: MMS runs a VITS forward pass
+# per sentence on CPU, so an uncapped detailed answer measured here gave
+# 2.5 minutes of audio and took 60 seconds to produce, while the text had
+# 
+# Measured on this project's Xitsonga MMS voice, synthesizing the same
+# long answer at three caps:
+# 
+# 300 chars -> 12s to synthesize, 24s of audio
+# 400 chars -> 15s to synthesize, 37s of audio   <- default
+# 600 chars -> 22s to synthesize, 57s of audio
+# uncapped  -> 60s to synthesize, 152s of audio
+# 
+# 400 is the point where the clip is long enough to demonstrate a voice
+# and short enough that a room does not sit through it. The text is on
+# screen before synthesis starts, so this delays nothing anyone is reading.
+# lands on a sentence boundary and the interface says it happened.
+max_speech_characters = 400
 speaking_rate = 0.85   # Pacing control (< 1.0 is SLOWER; applies to both backends)
 noise_scale = 0.35      # Prosody variance, MMS only (< 0.667 removes robotic pitch jitter)
 

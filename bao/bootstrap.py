@@ -129,5 +129,6 @@ def build_orchestrator(
         voice_fallback_related=settings.voice_fallback_related,
         voice_fallback_english=settings.voice_fallback_english,
         min_detection_confidence=settings.min_detection_confidence,
+        max_speech_characters=settings.max_speech_characters,
     )
     return settings, orchestrator

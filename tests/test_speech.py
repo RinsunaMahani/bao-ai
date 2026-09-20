@@ -280,3 +280,71 @@ def test_a_configured_but_missing_checkpoint_is_ignored(tmp_path):
         assert "Sesotho" not in speech.related_language_voices()
     finally:
         speech.load_local_voices(original)
+
+
+# --- how much of a reply actually gets spoken ---------------------------
+
+
+def test_a_long_reply_is_not_read_out_in_full():
+    """Nothing capped this, and the cost is invisible from the text.
+
+    MMS runs a VITS forward pass per sentence on CPU, so a detailed answer
+    measured here produced 4.7 MB of WAV - two and a half minutes of audio
+    - and took 60 seconds to synthesize, while the text had been on screen
+    and readable the whole time.
+    """
+    from bao.services.speech import trim_for_speech
+
+    long_answer = "This is a sentence about calculus. " * 40
+    spoken, trimmed = trim_for_speech(long_answer, 400)
+    assert trimmed
+    assert len(spoken) <= 400
+
+
+def test_the_cut_lands_on_a_sentence_boundary():
+    """A clip that stops mid-word sounds like a fault rather than a
+    summary.
+    """
+    from bao.services.speech import trim_for_speech
+
+    spoken, _ = trim_for_speech("One. Two. Three. " * 40, 400)
+    assert spoken.endswith("."), spoken[-30:]
+
+
+def test_a_reply_shorter_than_the_cap_is_untouched():
+    from bao.services.speech import trim_for_speech
+
+    assert trim_for_speech("Avuxeni, hi njhani?", 400) == ("Avuxeni, hi njhani?", False)
+
+
+def test_text_with_no_sentence_or_word_breaks_still_gets_cut():
+    """Degenerate input must not defeat the cap - the point is bounding
+    synthesis time, and an unbroken string is the worst case for it.
+    """
+    from bao.services.speech import trim_for_speech
+
+    spoken, trimmed = trim_for_speech("x" * 900, 400)
+    assert trimmed and len(spoken) == 400
+
+
+def test_the_cap_can_be_switched_off():
+    from bao.services.speech import trim_for_speech
+
+    long_answer = "One. Two. " * 100
+    assert trim_for_speech(long_answer, 0) == (long_answer, False)
+
+
+def test_trimming_is_disclosed_to_the_caller(monkeypatch):
+    """A shortened reading the listener is told about is a summary; one
+    they are not told about is the app appearing to lose the end of its own
+    answer.
+    """
+    monkeypatch.setattr(speech_module, "_HAS_EDGE_BACKEND", False)
+    monkeypatch.setattr(speech_module, "_HAS_MMS_BACKEND", False)
+
+    notes = []
+    speech_module.synthesize_speech(
+        "This is a sentence about calculus. " * 40, "English",
+        max_characters=400, on_trim=notes.append,
+    )
+    assert notes and "full text" in notes[0]

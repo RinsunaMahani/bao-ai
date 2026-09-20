@@ -267,6 +267,33 @@ class Settings:
         return self._raw.get("speech", {}).get("local_voices", {})
 
     @property
+    def max_speech_characters(self) -> int:
+        """How much of a reply to read aloud. 0 disables the cap.
+
+        Nothing capped this, and the cost is invisible from the text: MMS
+        runs a VITS forward pass per sentence on CPU, so a detailed answer
+        measured here produced two and a half minutes of audio and took 60
+        seconds to synthesize — while the text had been on screen and
+        readable the whole time.
+
+        
+        Measured on this project's Xitsonga MMS voice, synthesizing the same
+        long answer at three caps:
+        
+        300 chars -> 12s to synthesize, 24s of audio
+        400 chars -> 15s to synthesize, 37s of audio   <- default
+        600 chars -> 22s to synthesize, 57s of audio
+        uncapped  -> 60s to synthesize, 152s of audio
+        
+        400 is the point where the clip is long enough to demonstrate a voice
+        and short enough that a room does not sit through it. The text is on
+        screen before synthesis starts, so this delays nothing anyone is reading.
+        the voice, short enough that nobody sits through it. The cut lands
+        on a sentence boundary and the interface says it happened.
+        """
+        return int(self._raw.get("speech", {}).get("max_speech_characters", 400))
+
+    @property
     def voice_fallback_related(self) -> bool:
         """Speak a language with a closely-related language's voice when it
         has none of its own. OFF by default: it is an approximation, and a

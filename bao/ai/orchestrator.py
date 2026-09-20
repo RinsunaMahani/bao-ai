@@ -139,6 +139,7 @@ class Orchestrator:
         voice_fallback_related: bool = False,
         voice_fallback_english: bool = False,
         min_detection_confidence: float = 0.0,
+        max_speech_characters: int = 400,
     ):
         self.security = security
         self.language_detector = language_detector
@@ -158,6 +159,7 @@ class Orchestrator:
         self.voice_fallback_related = voice_fallback_related
         self.voice_fallback_english = voice_fallback_english
         self.min_detection_confidence = min_detection_confidence
+        self.max_speech_characters = max_speech_characters
 
     def handle(
         self,
@@ -364,6 +366,7 @@ class Orchestrator:
             return result
 
         errors: list[str] = []
+        trims: list[str] = []
         speech = synthesize_speech(
             result.text,
             spoken_language,
@@ -372,7 +375,15 @@ class Orchestrator:
             noise_scale=self.tts_noise_scale,
             backend=self.tts_backend,
             on_error=errors.append,
+            max_characters=self.max_speech_characters,
+            on_trim=trims.append,
         )
+        # A shortened reading the listener is told about is a summary; one
+        # they are not told about is the app appearing to lose the end of
+        # its own answer. Appended rather than assigned, so it cannot erase
+        # a substituted-voice note that matters just as much.
+        if trims and speech is not None:
+            result.voice_note = f"{note} {trims[-1]}".strip() if note else trims[-1]
         result.speech_language = spoken_language
         result.speech_error = errors[-1] if errors and speech is None else None
         result.audio = speech.data if speech else None
