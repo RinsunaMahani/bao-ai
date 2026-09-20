@@ -48,6 +48,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -321,6 +322,19 @@ class TFLiteLanguageDetector(LanguageDetector):
         self.keras_model = None
         self.is_tflite = False
         self._tokenizer: _KerasWordTokenizer | None = None
+        # TFLite inference is three stateful calls against one interpreter
+        # — set_tensor, invoke, get_tensor — so it is not reentrant. The
+        # web app serves each session on its own thread and shares this
+        # object between them, and two sessions detecting at the same
+        # moment made LiteRT raise "There is at least 1 reference to
+        # internal data in the interpreter": measured with three threads,
+        # two of them died outright.
+        #
+        # A lock rather than an interpreter per session, because inference
+        # is about a millisecond while loading the model costs seconds and
+        # ~13 MB. Serialising a millisecond is free; duplicating the model
+        # per visitor is not.
+        self._lock = threading.Lock()
         self._initialize(model_path, fallback_keras_path, tokenizer_config_path)
 
     def _initialize(self, model_path: str, fallback_keras_path: str | None, tokenizer_config_path: str | None) -> None:
@@ -377,11 +391,19 @@ class TFLiteLanguageDetector(LanguageDetector):
         input_data = self._tokenizer.encode(text, maxlen=35)
 
         if self.is_tflite:
-            self.interpreter.set_tensor(self.input_details[0]["index"], input_data)
-            self.interpreter.invoke()
-            output = self.interpreter.get_tensor(self.output_details[0]["index"])
+            with self._lock:
+                self.interpreter.set_tensor(self.input_details[0]["index"], input_data)
+                self.interpreter.invoke()
+                # Copied inside the lock. get_tensor returns a view onto
+                # the interpreter's own buffer, so releasing the lock first
+                # would let the next thread overwrite the numbers this one
+                # is about to read — and LiteRT refuses to invoke at all
+                # while such a reference is outstanding.
+                output = self.interpreter.get_tensor(
+                    self.output_details[0]["index"]).copy()
         else:
-            output = self.keras_model.predict(input_data, verbose=0)
+            with self._lock:
+                output = self.keras_model.predict(input_data, verbose=0)
 
         probabilities = output[0]
         predicted_class = int(np.argmax(probabilities))

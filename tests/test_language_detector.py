@@ -286,3 +286,56 @@ def test_a_marker_word_never_overrules_a_confident_model():
         pytest.skip("TFLite detector unavailable")
 
     assert detector.detect("Kan jy my help om my identiteitsdokument te kry.").language == "Afrikaans"
+
+
+def test_concurrent_detection_is_safe():
+    """The web app serves each session on its own thread and shares one
+    detector between them.
+
+    TFLite inference is three stateful calls against a single interpreter
+    — set_tensor, invoke, get_tensor — so it is not reentrant. Two
+    sessions detecting at the same moment made LiteRT raise "There is at
+    least 1 reference to internal data in the interpreter"; measured with
+    three threads, two died outright, which in Streamlit is a traceback
+    where someone's answer should be.
+
+    Serialised rather than given an interpreter each: inference is about a
+    millisecond while loading the model costs seconds and ~13 MB.
+    """
+    import collections
+    import threading
+
+    from bao.services.language_detector import get_language_detector
+
+    detector = get_language_detector(
+        prefer_ml=True, model_path=_settings.classifier_model_path,
+        tokenizer_config_path=_settings.tokenizer_config_path,
+    )
+    if not _tflite_available:
+        pytest.skip("TFLite detector unavailable")
+
+    sentences = {
+        "Xitsonga": "Avuxeni, ndzi kombela mpfuno hi ta swa rihanyo ni vutomi.",
+        "isiZulu": "Sawubona, ngicela ungisize ngolwazi mayelana nezempilo.",
+        "Afrikaans": "Kan jy my asseblief help om my identiteitsdokument te kry.",
+    }
+    results = collections.defaultdict(collections.Counter)
+    errors: list[BaseException] = []
+
+    def hammer(language, text):
+        try:
+            for _ in range(25):
+                results[language][detector.detect(text).language] += 1
+        except BaseException as e:  # noqa: BLE001 - re-raised on the main thread
+            errors.append(e)
+
+    threads = [threading.Thread(target=hammer, args=(k, v)) for k, v in sentences.items()]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"concurrent detection raised {errors[0]!r}"
+    for language in sentences:
+        assert results[language][language] == 25, (
+            f"{language}: {dict(results[language])}")
