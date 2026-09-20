@@ -246,18 +246,48 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
         )
         if uploaded_files and st.button("Index Uploaded Documents"):
             with st.spinner("Extracting text & updating index..."):
-                total_chunks, file_count = 0, 0
+                total_chunks, file_count, unreadable = 0, 0, []
                 for file in uploaded_files:
                     text = extract_text_from_bytes(file.getvalue(), file.name)
                     if text.strip():
                         total_chunks += orchestrator.document_retriever.add_document(file.name, text)
                         file_count += 1
+                    else:
+                        # Named rather than counted. "No readable text found"
+                        # across a multi-file upload left the user guessing
+                        # which file failed — usually a scanned PDF, which
+                        # has no text layer to extract at all.
+                        unreadable.append(file.name)
                 if file_count:
                     st.success(f"Indexed {file_count} doc(s) into {total_chunks} chunks.")
-                elif not has_pdf_support():
-                    st.warning("No readable text found. (Install `pypdf` to enable PDF uploads.)")
-                else:
-                    st.warning("No readable text found in uploaded files.")
+                if unreadable:
+                    st.warning(
+                        f"No readable text in: {', '.join(unreadable)}."
+                        + ("" if has_pdf_support() else
+                           " Install `pypdf` to read PDFs.")
+                        + " A scanned PDF is an image and has no text layer."
+                    )
+
+        # What the assistant can currently see, and a way to take it back.
+        # Neither existed: uploads were invisible once indexed and there was
+        # no way to remove them short of restarting, which matters because
+        # they are the user's own files.
+        indexed = orchestrator.document_retriever.sources
+        if indexed:
+            st.caption(
+                f"Indexed this session: {len(indexed)} document(s), "
+                f"{len(orchestrator.document_retriever)} chunks"
+            )
+            with st.expander("Documents Bao can read"):
+                for name in indexed:
+                    st.caption(f"📄 {name}")
+                st.caption(
+                    "Session-scoped and never written to disk. They are "
+                    "gone when you close the tab."
+                )
+            if st.button("Clear uploaded documents"):
+                orchestrator.document_retriever.clear()
+                st.rerun()
 
 
 def _format_detection_badge(result) -> str:

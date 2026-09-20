@@ -121,3 +121,74 @@ def test_chunk_text_long_document_multiple_chunks():
     long_text = " ".join(["word"] * 1000)
     chunks = chunk_text(long_text, source_name="long.txt", chunk_size=300, chunk_overlap=50)
     assert len(chunks) > 1
+
+# --- re-indexing the same upload ----------------------------------------
+
+
+def test_reindexing_a_document_replaces_it_rather_than_duplicating():
+    """The uploader keeps its files across reruns, so pressing "Index
+    Uploaded Documents" again re-indexed everything. The visible cost was
+    in the prompt: the same passage was handed to Gemini twice, paying for
+    the tokens and inviting the model to read a repetition as emphasis. It
+    also distorts TF-IDF, which weights terms by how many chunks hold them.
+    """
+    from bao.knowledge.retriever import DocumentRetriever
+
+    dr = DocumentRetriever()
+    doc = "The submission deadline is 14 November 2026. The supervisor is Dr Mokoena."
+    for _ in range(3):
+        dr.add_document("handbook.pdf", doc)
+
+    assert len(dr) == 1
+    assert dr.search("when is the deadline").count("[Document:") == 1
+
+
+def test_a_different_document_still_adds():
+    """Replacement must key on the document, not clear the store."""
+    from bao.knowledge.retriever import DocumentRetriever
+
+    dr = DocumentRetriever()
+    dr.add_document("a.txt", "Registration opens in January.")
+    dr.add_document("b.txt", "Graduation is held in April.")
+    dr.add_document("a.txt", "Registration opens in January.")
+    assert dr.sources == ["a.txt", "b.txt"]
+    assert len(dr) == 2
+
+
+def test_a_document_whose_name_prefixes_another_is_not_swallowed():
+    """Chunk ids embed the source name, so matching on an id prefix would
+    make re-indexing "notes.txt" also delete "notes.txt.backup".
+    """
+    from bao.knowledge.retriever import DocumentRetriever
+
+    dr = DocumentRetriever()
+    dr.add_document("notes.txt", "Registration opens in January.")
+    dr.add_document("notes.txt.backup", "Graduation is held in April.")
+    dr.add_document("notes.txt", "Registration opens in February.")
+    assert set(dr.sources) == {"notes.txt", "notes.txt.backup"}
+
+
+def test_the_store_has_a_ceiling():
+    """Nothing bounded this: every upload appended, so a large PDF
+    re-indexed a few times grew both the store and the per-add refit cost
+    without limit. Reaching the ceiling is reported, not silent.
+    """
+    from bao.knowledge.retriever import DocumentRetriever
+
+    dr = DocumentRetriever(chunk_size=10, chunk_overlap=0, max_chunks=5)
+    added = dr.add_document("big.txt", " ".join(f"word{i}" for i in range(500)))
+    assert added == 5
+    assert len(dr) == 5
+    assert dr.add_document("another.txt", "more text entirely") == 0
+
+
+def test_clearing_really_drops_everything():
+    """Uploaded documents are the user's own, so `clear` has to mean it."""
+    from bao.knowledge.retriever import DocumentRetriever
+
+    dr = DocumentRetriever()
+    dr.add_document("private.txt", "Confidential medical results for one person.")
+    dr.clear()
+    assert len(dr) == 0
+    assert dr.sources == []
+    assert dr.search("medical results") == ""

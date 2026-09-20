@@ -45,6 +45,11 @@ class Chunk:
     id: str
     title: str
     content: str
+    # Which upload this came from. Carried separately from `id`, which
+    # embeds it as a prefix, so re-indexing a file can replace exactly its
+    # own chunks — matching on the id prefix would also catch a document
+    # whose name merely starts with the same characters.
+    source: str = ""
 
 
 def load_knowledge_csv(path: str):
@@ -118,7 +123,8 @@ def chunk_text(text: str, source_name: str, chunk_size: int = 300, chunk_overlap
         return []
 
     if len(words) <= chunk_size:
-        return [Chunk(id=f"{source_name}_chunk_1", title=f"{source_name} (Chunk 1)", content=text.strip())]
+        return [Chunk(id=f"{source_name}_chunk_1", title=f"{source_name} (Chunk 1)",
+                      content=text.strip(), source=source_name)]
 
     chunks: list[Chunk] = []
     start = 0
@@ -129,6 +135,7 @@ def chunk_text(text: str, source_name: str, chunk_size: int = 300, chunk_overlap
             id=f"{source_name}_chunk_{idx}",
             title=f"{source_name} (Chunk {idx})",
             content=" ".join(words[start:end]),
+            source=source_name,
         ))
         idx += 1
         start += (chunk_size - chunk_overlap)
