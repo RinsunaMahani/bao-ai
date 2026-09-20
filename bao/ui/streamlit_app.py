@@ -72,9 +72,22 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
         st.subheader("Live Telemetry")
         mem = psutil.virtual_memory()
         st.metric("RAM Used", f"{mem.used / (1024**3):.2f} GB", f"{mem.percent}%")
+        timings = st.session_state.get("last_timings") or {}
         if "last_latency" in st.session_state:
-            st.metric("Last Query Latency", f"{st.session_state['last_latency']:.1f} ms")
-        timings = st.session_state.get("last_timings")
+            # "Time to answer", not "latency". latency_ms is measured when
+            # handle() returns, which is when the TEXT is on screen; speech
+            # is synthesized afterwards and its time lands in stage_timings.
+            # Labelling that total "latency" while listing a speech stage
+            # underneath it meant the stages visibly summed to more than the
+            # figure above them, with nothing explaining why.
+            st.metric("Time to answer", f"{st.session_state['last_latency']:.0f} ms")
+            speech_ms = timings.get("speech")
+            if speech_ms:
+                st.metric(
+                    "Voice (after the text)", f"{speech_ms:.0f} ms",
+                    help="Synthesis runs after the answer is already on screen, "
+                         "so it does not delay reading it.",
+                )
         if timings:
             # Which stage was slow, not just that the turn was. Retrieval
             # is sub-millisecond; if a turn felt slow, this says whether
