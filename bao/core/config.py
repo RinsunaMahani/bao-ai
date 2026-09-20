@@ -115,6 +115,31 @@ class Settings:
         return self._raw.get("model", {}).get("gemini_model", GEMINI_MODEL_DEFAULT)
 
     @property
+    def thinking_level(self) -> str:
+        """How much the model reasons before it starts answering.
+
+        Gemini 3.x models think first and emit nothing until they finish,
+        so this sets how long a user watches a spinner — streaming cannot
+        help, because there is nothing to stream yet. Measured on
+        gemini-3.5-flash with "explain calculus in xitsonga":
+
+            default   11.9s to the first word, 13.0s total
+            MINIMAL    6.6s to the first word, 12.8s total
+            LOW       15.0s to the first word, 19.2s total
+
+        All three answered in correct Xitsonga at 100% detection
+        confidence, so the reasoning was not buying accuracy on this kind
+        of question. MINIMAL is the default because this is an assistant
+        answering everyday questions in eleven languages, not a reasoning
+        benchmark, and halving the wait in front of an audience is worth
+        more than thinking tokens nobody sees.
+
+        Raise it to LOW, MEDIUM or HIGH for genuinely hard questions, or
+        set "default" to let the model decide.
+        """
+        return str(self._raw.get("model", {}).get("thinking_level", "MINIMAL")).strip()
+
+    @property
     def generation_max_attempts(self) -> int:
         """How many times to try a generation call before giving up.
 

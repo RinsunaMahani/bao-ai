@@ -114,6 +114,7 @@ class GeminiClient:
         self.settings = settings
         self.model_name = settings.gemini_model
         self.max_attempts = max(1, settings.generation_max_attempts)
+        self.thinking_level = settings.thinking_level
         self._api_key = api_key
         self.client = None
         self._setup_client()
@@ -149,6 +150,25 @@ class GeminiClient:
         config_kwargs = {"temperature": temperature}
         if system_instruction:
             config_kwargs["system_instruction"] = system_instruction
+
+        # Gemini 3.x models reason before emitting anything, so this
+        # decides how long someone watches a spinner — streaming cannot
+        # shorten it, because there is nothing to stream until thinking
+        # ends. See Settings.thinking_level for the measurements.
+        #
+        # Guarded rather than assumed: older SDKs have no ThinkingConfig,
+        # and a model that does not support the field rejects the request
+        # outright. Neither should cost the app its generation path.
+        level = (self.thinking_level or "").upper()
+        if level and level != "DEFAULT" and hasattr(types, "ThinkingConfig"):
+            try:
+                config_kwargs["thinking_config"] = types.ThinkingConfig(
+                    thinking_level=level
+                )
+            except Exception as e:  # unknown level, or a stricter SDK
+                logger.warning(
+                    f"Ignoring thinking_level={level!r} ({e}); using the model default."
+                )
         return types.GenerateContentConfig(**config_kwargs)
 
     def generate_stream(

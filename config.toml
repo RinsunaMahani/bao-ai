@@ -41,6 +41,19 @@ min_detection_confidence = 0.5
 # so one spike does not cost the user their turn. Backoff is a fraction of
 # a second, so 3 attempts add about a second in the worst case. 1 = off.
 generation_max_attempts = 3
+# How much the model reasons before it starts answering. Gemini 3.x models
+# emit NOTHING until thinking finishes, so this is how long someone watches
+# a spinner — streaming cannot shorten it. Measured on gemini-3.5-flash
+# with "explain calculus in xitsonga":
+#
+#   MINIMAL    6.6s to the first word, 12.8s total
+#   default   11.9s to the first word, 13.0s total
+#   LOW       15.0s to the first word, 19.2s total
+#
+# All three answered in correct Xitsonga at 100%, so the extra reasoning
+# bought no accuracy on this kind of question. Raise to LOW/MEDIUM/HIGH for
+# genuinely hard ones, or "default" to let the model choose.
+thinking_level = "MINIMAL"
 
 [retrieval]
 default_similarity_threshold = 0.25

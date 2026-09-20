@@ -67,6 +67,9 @@ def client(monkeypatch):
     c.settings = Settings()
     c.model_name = "test-model"
     c.max_attempts = 3
+    # Set explicitly rather than inherited from config.toml: a deployment
+    # changing its latency tuning must not change what these tests assert.
+    c.thinking_level = "MINIMAL"
     c.client = object()
     monkeypatch.setattr(GeminiClient, "_sleep_before_retry", lambda self, attempt: None)
     return c
@@ -219,3 +222,42 @@ def test_the_wait_reaches_the_user_as_a_number():
     assert "13 seconds" in generation_busy_message(13.4)
     assert "1 second." in generation_busy_message(0.6)
     assert "moment" in generation_busy_message(None)
+
+
+# --- how long the user watches a spinner ---------------------------------
+
+
+def test_the_thinking_level_reaches_the_request(client):
+    """Gemini 3.x models emit NOTHING until reasoning finishes, so this is
+    what decides how long someone watches a spinner - streaming cannot
+    shorten it, because there is nothing to stream yet.
+
+    Measured on gemini-3.5-flash with "explain calculus in xitsonga":
+    MINIMAL reached the first word in 6.6s against 11.9s on the model
+    default, and in the full app the first word arrived in 2.7s where it
+    had been 21.7s. All levels answered in correct Xitsonga at 100%, so
+    the reasoning was buying no accuracy on this kind of question.
+    """
+    client.thinking_level = "MINIMAL"
+    config = client._config("be brief", 0.3)
+    assert config.thinking_config is not None
+    assert config.thinking_config.thinking_level == "MINIMAL"
+
+
+def test_default_leaves_the_model_to_decide(client):
+    """An explicit "default" must send no thinking_config at all, rather
+    than sending one that happens to mean the same thing.
+    """
+    client.thinking_level = "default"
+    assert client._config(None, 0.3).thinking_config is None
+
+
+def test_an_unusable_thinking_level_does_not_break_generation(client):
+    """The field is rejected outright by models that do not support it,
+    and older SDKs have no ThinkingConfig at all. Neither should cost the
+    app its generation path - a latency tuning knob must not be able to
+    take the answer down with it.
+    """
+    client.thinking_level = "NOT_A_REAL_LEVEL"
+    config = client._config(None, 0.3)  # must not raise
+    assert config.temperature == 0.3
