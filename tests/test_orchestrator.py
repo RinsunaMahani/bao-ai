@@ -550,3 +550,72 @@ def test_an_explicit_override_still_wins_over_a_named_language():
     )
     result = orch.handle("explain calculus in Xitsonga", language_override="Sesotho")
     assert result.reply_language == "Sesotho"
+
+
+def test_a_quoted_language_does_not_steal_the_voice():
+    """Observed live: "ni kombela u hlaya national anthem ya shona" was
+    answered in Xitsonga with the Shona anthem quoted inside it, and read
+    aloud by a SHONA voice.
+
+    Over the whole reply the detector returned Shona at 85%; over the
+    opening it returns Xitsonga at 100%. This assistant quotes other
+    languages constantly — lyrics, a passage being translated, a term
+    given in both — so the whole reply is the wrong sample. The opening is
+    where it speaks in its own voice, before it quotes anything.
+    """
+    from bao.ai.memory import ConversationMemory
+    from bao.ai.orchestrator import Orchestrator
+    from bao.core.security import SecurityGuardrails
+
+    class _Detector:
+        """Stands in for the real one: Xitsonga on the framing, Shona once
+        the quoted verses dominate.
+        """
+
+        def detect(self, text):
+            if "Yakazvarwa nomoto" in text and len(text) > 350:
+                return DetectionResult(language="Shona", confidence=0.85, backend="stub")
+            return DetectionResult(language="Xitsonga", confidence=1.0, backend="stub")
+
+    orch = Orchestrator(
+        security=SecurityGuardrails(),
+        language_detector=_Detector(),
+        knowledge_retriever=None,
+        gemini_client=None,
+        memory=ConversationMemory(),
+    )
+    reply = ("Inkomu! Hi leyi risimu ra tiko ra le Zimbabwe, leri tiviwaka hi ririmi "
+             "ra Xishona. Hi leswi swikiri swa rona: " + "Yakazvarwa nomoto wechimurenga " * 12)
+    assert orch._speech_language(reply, fallback="Xitsonga") == "Xitsonga"
+
+
+def test_a_requested_language_pins_the_voice():
+    """When the question named the language, a detector reading of the
+    reply must not overrule it — the user said it, we only inferred the
+    rest.
+    """
+    from bao.ai.memory import ConversationMemory
+    from bao.ai.orchestrator import Orchestrator
+    from bao.core.security import SecurityGuardrails
+
+    class _Client:
+        def is_available(self):
+            return True
+
+        def generate(self, prompt, system_instruction=None, temperature=0.3):
+            return "Avuxeni! Calculus i rhavi ra tinhlayo."
+
+    class _Detector:
+        def detect(self, text):
+            return DetectionResult(language="English", confidence=0.99, backend="stub")
+
+    orch = Orchestrator(
+        security=SecurityGuardrails(),
+        language_detector=_Detector(),
+        knowledge_retriever=None,
+        gemini_client=_Client(),
+        memory=ConversationMemory(),
+    )
+    result = orch.handle("explain calculus in Xitsonga")
+    assert result.language_was_requested is True
+    assert result.reply_language == "Xitsonga"

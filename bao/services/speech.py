@@ -523,33 +523,22 @@ def resolve_voice_language(
     return None, f"No voice is available for {target_language}; showing text only."
 
 
-# How much of a reply to actually speak.
+# How much of a reply to speak. 0 = all of it, which is the default.
 #
-# Nothing capped this, and the cost is not linear in anything a user can
-# see: MMS runs a VITS forward pass per sentence on CPU, so a detailed
-# answer measured here produced 4.7 MB of WAV — two and a half minutes of
-# audio — and took 60 seconds to synthesize. Nobody wants either, least of
-# all during a live demo, and the text was on screen and readable long
-# before the voice arrived.
+# This was capped at 400 characters to keep synthesis quick, and that was
+# the wrong trade for this app. The voice is not a flourish on top of text
+# someone has already read — for a user who cannot easily read the screen
+# it IS the answer, and half an answer is not an answer. An emergency
+# number cut off before the number is worse than no audio at all.
 #
-# 
-# Measured on this project's Xitsonga MMS voice, synthesizing the same
-# long answer at three caps:
-# 
-# 300 chars -> 12s to synthesize, 24s of audio
-# 400 chars -> 15s to synthesize, 37s of audio   <- default
-# 600 chars -> 22s to synthesize, 57s of audio
-# uncapped  -> 60s to synthesize, 152s of audio
-# 
-# 400 is the point where the clip is long enough to demonstrate a voice
-# and short enough that a room does not sit through it. The text is on
-# screen before synthesis starts, so this delays nothing anyone is reading.
-# demonstrate a voice and short enough that nobody waits through it. The
-# cut lands on a sentence boundary, never mid-word, and the caller is told
-# it happened — a shortened reading the listener knows about is a
-# summary; one they do not is the app appearing to lose the end of its
-# own answer.
-DEFAULT_MAX_SPEECH_CHARACTERS = 400
+# The cost is real and worth stating: MMS runs a VITS forward pass per
+# sentence on CPU, so a long reply takes roughly 60 seconds to synthesize
+# and produces two and a half minutes of audio. Synthesis runs AFTER the
+# text is on screen, so it delays nothing anyone is reading.
+#
+# Set a character count here to cap it again — the cut lands on a sentence
+# boundary and the interface says it happened.
+DEFAULT_MAX_SPEECH_CHARACTERS = 0
 
 NEWLINE = chr(10)  # spelled this way so the cut logic below stays escape-free
 

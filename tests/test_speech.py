@@ -348,3 +348,18 @@ def test_trimming_is_disclosed_to_the_caller(monkeypatch):
         max_characters=400, on_trim=notes.append,
     )
     assert notes and "full text" in notes[0]
+
+
+def test_replies_are_read_in_full_by_default():
+    """The voice is not a flourish on top of text someone has already
+    read. For a user who cannot easily read the screen it IS the answer,
+    and half an answer is not an answer — an emergency number cut off
+    before the number is worse than no audio at all.
+    """
+    from bao.core.config import Settings
+    from bao.services.speech import DEFAULT_MAX_SPEECH_CHARACTERS, trim_for_speech
+
+    assert DEFAULT_MAX_SPEECH_CHARACTERS == 0
+    long_answer = "The ambulance number is 10177. " * 60
+    assert trim_for_speech(long_answer, DEFAULT_MAX_SPEECH_CHARACTERS) == (long_answer, False)
+    assert Settings(".absent.toml").max_speech_characters == 0

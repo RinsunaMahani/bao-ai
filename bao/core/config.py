@@ -293,30 +293,21 @@ class Settings:
 
     @property
     def max_speech_characters(self) -> int:
-        """How much of a reply to read aloud. 0 disables the cap.
+        """How much of a reply to read aloud. 0 (the default) reads it all.
 
-        Nothing capped this, and the cost is invisible from the text: MMS
-        runs a VITS forward pass per sentence on CPU, so a detailed answer
-        measured here produced two and a half minutes of audio and took 60
-        seconds to synthesize — while the text had been on screen and
-        readable the whole time.
+        This was capped at 400 characters to keep synthesis quick, which
+        was the wrong trade for this app. The voice is not a flourish on
+        top of text someone has already read — for a user who cannot
+        easily read the screen it IS the answer, and half an answer is not
+        an answer. An emergency number cut off before the number is worse
+        than no audio.
 
-        
-        Measured on this project's Xitsonga MMS voice, synthesizing the same
-        long answer at three caps:
-        
-        300 chars -> 12s to synthesize, 24s of audio
-        400 chars -> 15s to synthesize, 37s of audio   <- default
-        600 chars -> 22s to synthesize, 57s of audio
-        uncapped  -> 60s to synthesize, 152s of audio
-        
-        400 is the point where the clip is long enough to demonstrate a voice
-        and short enough that a room does not sit through it. The text is on
-        screen before synthesis starts, so this delays nothing anyone is reading.
-        the voice, short enough that nobody sits through it. The cut lands
-        on a sentence boundary and the interface says it happened.
+        The cost is real: MMS runs a VITS forward pass per sentence on
+        CPU, so a long reply takes roughly 60 seconds and yields two and a
+        half minutes of audio. It runs after the text is rendered, so it
+        delays nothing anyone is reading.
         """
-        return int(self._raw.get("speech", {}).get("max_speech_characters", 400))
+        return int(self._raw.get("speech", {}).get("max_speech_characters", 0))
 
     @property
     def voice_fallback_related(self) -> bool:

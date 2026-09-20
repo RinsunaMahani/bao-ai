@@ -111,6 +111,10 @@ class PipelineResult:
     # so orchestrator-level state describes whichever turn ran most
     # recently, not the turn being spoken.
     language_was_overridden: bool = False
+    # Whether the QUESTION named the language ("...in Xitsonga"). Treated
+    # the same as an override when choosing the voice: the user said it, so
+    # a detector reading of the reply must not quietly overrule them.
+    language_was_requested: bool = False
     # Set when the reply was spoken by a language other than its own, or not
     # spoken at all. Shown to the user — a substitution they are told about
     # is a fallback; one they are not told about is a misrepresentation.
@@ -139,7 +143,7 @@ class Orchestrator:
         voice_fallback_related: bool = False,
         voice_fallback_english: bool = False,
         min_detection_confidence: float = 0.0,
-        max_speech_characters: int = 400,
+        max_speech_characters: int = 0,
     ):
         self.security = security
         self.language_detector = language_detector
@@ -265,6 +269,7 @@ class Orchestrator:
         #
         # Skipped when the caller pinned the language, since an explicit
         # override is a stronger statement than a phrase in the text.
+        language_was_requested = False
         if not language_override:
             requested = named_target_language(user_input)
             if requested and requested != reply_language:
@@ -273,6 +278,7 @@ class Orchestrator:
                     f"{reply_language}."
                 )
                 reply_language = requested
+            language_was_requested = requested is not None
 
         # 3. Knowledge retrieval (verified facts first, then session documents)
         #
@@ -325,6 +331,7 @@ class Orchestrator:
             stage_timings=timings,
             reply_language=reply_language,
             language_was_overridden=language_override is not None,
+            language_was_requested=language_was_requested,
         )
 
         # 7. Speech (optional, and deliberately last)
@@ -348,7 +355,7 @@ class Orchestrator:
         speech_language = self._speech_language(
             result.text,
             fallback=result.reply_language or result.detected_language,
-            was_overridden=result.language_was_overridden,
+            was_overridden=result.language_was_overridden or result.language_was_requested,
         )
         # Which language will actually be spoken, and why — Tiers 1 to 4.
         spoken_language, note = resolve_voice_language(
@@ -396,6 +403,22 @@ class Orchestrator:
     # them on purpose.
     SPEECH_LANGUAGE_MIN_CONFIDENCE = 0.5
 
+    # How much of a reply to read when deciding which voice speaks it.
+    #
+    # The whole reply is the wrong sample when the reply QUOTES another
+    # language, which this assistant does constantly — lyrics, a passage
+    # being translated, a term given in both languages. Observed live:
+    # "ni kombela u hlaya national anthem ya shona" was answered in
+    # Xitsonga with the Shona anthem quoted inside it. Over the full text
+    # the detector returned Shona at 85%, so a Xitsonga reply was read
+    # aloud by a Shona voice. Over the opening it returns Xitsonga at 100%.
+    #
+    # The opening is where an assistant speaks in its own voice — the
+    # greeting and the framing sentence — before it quotes anything. That
+    # is the language being SPOKEN, as opposed to the languages appearing
+    # in the reply, and it is the first that the voice should follow.
+    SPEECH_LANGUAGE_SAMPLE_CHARS = 300
+
     def _speech_language(self, text: str, fallback: str, was_overridden: bool = False) -> str:
         """Picks the voice language from the REPLY, not the question.
 
@@ -410,6 +433,11 @@ class Orchestrator:
         Falls back to the question's language when the detector isn't
         confident, so a weak guess on the reply can't override a solid one
         on the input.
+
+        Only the OPENING of the reply is sampled, because this assistant
+        quotes other languages constantly — lyrics, a passage being
+        translated, a term given in both. See
+        SPEECH_LANGUAGE_SAMPLE_CHARS for the case that showed it.
 
         Known limitation, worth stating rather than hiding: this is only
         as good as the detector. On genuinely code-switched replies (the
@@ -429,7 +457,16 @@ class Orchestrator:
             # on the reply must not quietly overrule them.
             return fallback
 
-        result = self.language_detector.detect(text)
+        # Sampled from the opening rather than the whole reply — see
+        # SPEECH_LANGUAGE_SAMPLE_CHARS. Cut on a space so a word is not
+        # split, which would hand the detector a fragment.
+        sample = text[: self.SPEECH_LANGUAGE_SAMPLE_CHARS]
+        if len(text) > self.SPEECH_LANGUAGE_SAMPLE_CHARS:
+            cut = sample.rfind(" ")
+            if cut > self.SPEECH_LANGUAGE_SAMPLE_CHARS // 2:
+                sample = sample[:cut]
+
+        result = self.language_detector.detect(sample)
         if result.confidence < self.SPEECH_LANGUAGE_MIN_CONFIDENCE:
             return fallback
         if result.language != fallback:
