@@ -192,3 +192,38 @@ def test_clearing_really_drops_everything():
     assert len(dr) == 0
     assert dr.sources == []
     assert dr.search("medical results") == ""
+
+
+# --- uploads that are not what they claim to be --------------------------
+
+
+@pytest.mark.parametrize("filename,payload", [
+    ("corrupt.pdf", b"this is definitely not a pdf"),
+    ("empty.pdf", b""),
+    ("truncated.pdf", b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog"),
+    ("weird.exe", b"MZ\x90\x00binary"),
+    ("noext", b"some text with no extension"),
+    ("bad_utf8.txt", b"\xff\xfe\x00invalid utf8 \xc3\x28"),
+    ("malformed.csv", b'a,b\n"unclosed quote,c\n'),
+])
+def test_an_unreadable_upload_returns_nothing_rather_than_raising(filename, payload):
+    """This is where a file chosen by someone else enters the app, so "not
+    readable" has to be an ordinary outcome.
+
+    A corrupt or empty PDF used to raise out of here, and the Streamlit
+    upload handler has no try/except - so picking the wrong file replaced
+    the page with a traceback during a demo. pypdf raises several distinct
+    types (PdfStreamError, EmptyFileError), which is why the guard is not
+    written against a list of them.
+    """
+    from bao.knowledge.loader import extract_text_from_bytes
+
+    assert isinstance(extract_text_from_bytes(payload, filename), str)
+
+
+def test_a_readable_upload_still_works():
+    """The guard must not swallow success."""
+    from bao.knowledge.loader import extract_text_from_bytes
+
+    assert "deadline" in extract_text_from_bytes(
+        b"The deadline is 14 November.", "notes.txt")
