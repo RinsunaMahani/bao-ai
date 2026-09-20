@@ -10,7 +10,7 @@ import psutil
 import streamlit as st
 
 from bao.ai.orchestrator import Orchestrator
-from bao.bootstrap import build_orchestrator
+from bao.bootstrap import build_orchestrator, for_session
 from bao.core.config import ASSISTANT_LOGO_PATH, LABELS, PAN_AFRICAN_LABELS, Settings
 from bao.knowledge.loader import extract_text_from_bytes, has_pdf_support
 from bao.services.language_detector import CompositeLanguageDetector
@@ -43,14 +43,38 @@ st.set_page_config(
 
 
 @st.cache_resource
-def init_system():
-    """Builds the pipeline once per session.
+def _shared_pipeline():
+    """Built ONCE for the whole server, and shared by every visitor.
 
-    The pipeline itself comes from bao.bootstrap so the web app and the
-    console cannot drift apart. Only the two presentation-layer pieces the
-    console has no use for are added here.
+    Correct for what it holds: the TFLite classifier, the fitted knowledge
+    base and the API client are identical for everybody and cost seconds
+    to construct, so rebuilding them per session would be waste.
+
+    It must not be used directly — see init_system.
     """
-    settings, orchestrator = build_orchestrator()
+    return build_orchestrator()
+
+
+def init_system():
+    """The pipeline for THIS visitor.
+
+    `@st.cache_resource` caches across all users, sessions and reruns, so
+    handing its object straight to the page shared one conversation memory
+    and one uploaded-document store between everyone connected. A second
+    visitor's question arrived carrying the first visitor's conversation,
+    and a file one person uploaded was retrievable by the next.
+
+    That was invisible from the screen, which is what made it dangerous:
+    `display_messages` is per-session and correct, so each visitor saw
+    only their own chat bubbles while the model received everybody's.
+
+    So the heavy read-only parts stay shared and the mutable ones are
+    per-session, held in session_state rather than rebuilt on each rerun.
+    """
+    settings, shared = _shared_pipeline()
+    if "orchestrator" not in st.session_state:
+        st.session_state.orchestrator = for_session(shared)
+    orchestrator = st.session_state.orchestrator
     return settings, orchestrator, orchestrator.document_retriever
 
 
@@ -101,9 +125,12 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
 
         # Runtime toggle rather than a config edit. The composite detector
         # is always constructed when its bundle exists, so flipping this
-        # costs nothing — no pipeline rebuild, no model reload. Mutating a
-        # cached object is safe here because Streamlit serves one session
-        # per process in this deployment.
+        # costs nothing — no pipeline rebuild, no model reload.
+        #
+        # Safe to mutate because `for_session` gave this visitor their own
+        # copy of the composite. It previously mutated the object shared by
+        # every visitor, so one person switching these languages on
+        # switched them on for everybody.
         detector = orchestrator.language_detector
         if isinstance(detector, CompositeLanguageDetector):
             enabled = st.checkbox(

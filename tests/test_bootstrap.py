@@ -10,6 +10,8 @@ enforcement rather than by comment.
 import inspect
 import re
 
+import pytest
+
 from bao.bootstrap import build_orchestrator
 from bao.ui import console_app, streamlit_app
 
@@ -83,3 +85,97 @@ def test_no_dead_api_key_constant():
     assert not re.search(r"^GEMINI_API_KEY\s*=", source, re.MULTILINE), (
         "dead constant: client.py reads the environment directly"
     )
+
+
+# --- one visitor's data must not reach another ---------------------------
+
+
+def test_uploaded_documents_do_not_leak_between_sessions():
+    """Demonstrated before the fix with a private results file: three
+    differently-worded questions from a second session all returned it.
+
+    Streamlit's @st.cache_resource caches across ALL users and sessions,
+    and the cached orchestrator owned the uploaded-document store.
+    """
+    from bao.bootstrap import build_orchestrator, for_session
+
+    _, shared = build_orchestrator()
+    a, b = for_session(shared), for_session(shared)
+
+    a.document_retriever.add_document(
+        "results.txt",
+        "Rinsuna Mahani failed MATH301 with 42 percent and is on academic probation.")
+
+    assert a.document_retriever.search("MATH301 academic probation"), "A keeps its own"
+    for query in ("MATH301 academic probation", "who failed MATH301",
+                  "what percent did Rinsuna get"):
+        assert not b.document_retriever.search(query), f"leaked via {query!r}"
+
+
+def test_conversation_history_does_not_leak_between_sessions():
+    """Memory is prepended to every prompt, so a shared one meant a second
+    visitor's question arrived carrying the first visitor's conversation.
+
+    Invisible from the screen: display_messages is per-session and was
+    always correct, so each visitor saw only their own bubbles while the
+    model received everybody's.
+    """
+    from bao.bootstrap import build_orchestrator, for_session
+
+    _, shared = build_orchestrator()
+    a, b = for_session(shared), for_session(shared)
+
+    a.handle("my medical results are confidential", force_offline=True)
+
+    assert a.memory.as_context(), "A keeps its own history"
+    assert not b.memory.as_context(), "B must start with an empty context"
+
+
+def test_the_language_toggle_is_per_session():
+    """The sidebar mutates `enabled` on the composite detector. Shared,
+    one visitor switching the pan-African languages on switched them on
+    for everyone.
+    """
+    from bao.bootstrap import build_orchestrator, for_session
+    from bao.services.language_detector import CompositeLanguageDetector
+
+    _, shared = build_orchestrator()
+    if not isinstance(shared.language_detector, CompositeLanguageDetector):
+        pytest.skip("no pan-African bundle present")
+
+    a, b = for_session(shared), for_session(shared)
+    a.language_detector.enabled = not b.language_detector.enabled
+    assert a.language_detector.enabled != b.language_detector.enabled
+
+
+def test_the_expensive_components_are_still_shared():
+    """The isolation must not become a per-visitor model reload. The
+    classifier and the fitted knowledge base are read-only and identical
+    for everyone, so they stay shared — that is what @st.cache_resource is
+    for, and rebuilding them per session would cost seconds each time.
+    """
+    from bao.bootstrap import build_orchestrator, for_session
+
+    _, shared = build_orchestrator()
+    a, b = for_session(shared), for_session(shared)
+
+    assert a.knowledge_retriever is b.knowledge_retriever
+    assert a.gemini_client is b.gemini_client
+    assert a.security is b.security
+
+
+def test_session_orchestrators_inherit_every_tuning_value():
+    """for_session copies rather than re-listing the constructor, so a
+    parameter added to Orchestrator later cannot silently stop reaching
+    session orchestrators. This fails if that ever changes.
+    """
+    from bao.bootstrap import build_orchestrator, for_session
+
+    _, shared = build_orchestrator()
+    session = for_session(shared)
+
+    replaced = {"memory", "document_retriever", "language_detector"}
+    for field, value in vars(shared).items():
+        if field in replaced:
+            continue
+        assert vars(session)[field] == value, f"{field} did not carry across"
