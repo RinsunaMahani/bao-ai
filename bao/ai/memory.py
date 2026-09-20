@@ -27,9 +27,26 @@ class Turn:
 @dataclass
 class ConversationMemory:
     max_turns: int = 6
+    # How much of one turn to keep. The window bounded how MANY turns were
+    # carried and nothing bounded how LARGE each was, which is the half
+    # that grows: the security guardrail caps user input at 500 characters,
+    # but a generated reply is uncapped, and a measured one ran to 2,059.
+    # Six such exchanges prepended 12,656 characters — roughly 3,200 tokens
+    # — to every subsequent request. On a free tier with a small daily
+    # allowance, that is paid again on each turn, and a longer prompt also
+    # delays the first word, which is the part an audience watches.
+    #
+    # 400 characters because of what this memory is FOR: resolving a
+    # follow-up like "and in Afrikaans?" or "what did I just ask you"
+    # needs the gist of the exchange, not the full text of an essay. The
+    # cut is marked so the model can see it is reading an excerpt rather
+    # than a complete previous answer.
+    max_chars_per_turn: int = 400
     turns: list[Turn] = field(default_factory=list)
 
     def add(self, role: str, content: str, language: str | None = None) -> None:
+        if self.max_chars_per_turn and len(content) > self.max_chars_per_turn:
+            content = content[: self.max_chars_per_turn].rstrip() + " […]"
         self.turns.append(Turn(role=role, content=content, language=language))
         # Keep the last max_turns*2 entries (user+assistant pairs).
         overflow = len(self.turns) - (self.max_turns * 2)
