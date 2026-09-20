@@ -6,6 +6,8 @@ retrieval language preference and voice selection. So the property that
 matters most is not "does it work" but "does it change nothing when off".
 """
 
+from pathlib import Path
+
 import pytest
 
 from bao.bootstrap import build_orchestrator
@@ -168,8 +170,11 @@ def test_unsure_primary_keeps_its_answer_when_secondary_is_also_unsure():
 # --- With the real bundle, if present ------------------------------------
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def real_composite():
+    """Module-scoped for the same reason as full_composite: the bundle is
+    9 MB and this feeds a thirteen-case parametrised test.
+    """
     settings = Settings()
     pan = SklearnLanguageDetector(settings.pan_african_model_path)
     if not pan.is_available():
@@ -298,15 +303,14 @@ _PREVIOUSLY_MISROUTED = [
 ]
 
 
-@pytest.mark.parametrize("expected,text", _PREVIOUSLY_MISROUTED)
-def test_languages_hidden_by_the_old_primary_gate_are_detected(expected, text):
-    """Each of these was answered in a South African language.
+@pytest.fixture(scope="module")
+def full_composite():
+    """The real classifier paired with the real pan-African bundle.
 
-    The primary was confidently wrong on all of them - Yoruba read as
-    Xitsonga at 99%, Hausa as English at 97% - so it never fell below
-    primary_min and the pan-African model was never consulted. The bug was
-    not that the secondary was inaccurate; it was right about 14 of 14. The
-    bug was that it was not asked.
+    Module-scoped because both are expensive to construct — a 9 MB joblib
+    bundle and a TFLite interpreter — and the parametrised tests below
+    would otherwise rebuild both once per case. Safe to share: detection is
+    stateless, nothing here mutates the detectors.
     """
     settings = Settings()
     pan = SklearnLanguageDetector(settings.pan_african_model_path)
@@ -317,8 +321,22 @@ def test_languages_hidden_by_the_old_primary_gate_are_detected(expected, text):
         model_path=settings.classifier_model_path,
         tokenizer_config_path=settings.tokenizer_config_path,
     )
-    composite = CompositeLanguageDetector(primary=primary, secondary=pan)
-    assert composite.detect(text).language == expected
+    return CompositeLanguageDetector(primary=primary, secondary=pan)
+
+
+@pytest.mark.parametrize("expected,text", _PREVIOUSLY_MISROUTED)
+def test_languages_hidden_by_the_old_primary_gate_are_detected(
+    expected, text, full_composite
+):
+    """Each of these was answered in a South African language.
+
+    The primary was confidently wrong on all of them - Yoruba read as
+    Xitsonga at 99%, Hausa as English at 97% - so it never fell below
+    primary_min and the pan-African model was never consulted. The bug was
+    not that the secondary was inaccurate; it was right about 14 of 14. The
+    bug was that it was not asked.
+    """
+    assert full_composite.detect(text).language == expected
 
 
 def test_luganda_is_a_known_miss_and_stays_documented():
@@ -339,4 +357,39 @@ def test_luganda_is_a_known_miss_and_stays_documented():
     assert result.confidence < 0.5, (
         "Luganda now clears secondary_strong - remove it from the known-miss "
         "list in the CompositeLanguageDetector docstring and from this test"
+    )
+
+
+def test_the_bundle_loads_without_a_version_warning():
+    """A joblib bundle records the scikit-learn that pickled it, and
+    loading it under a different one warns on every estimator.
+
+    Four warnings per load drowned the suite at 280 total, where a real one
+    would have gone unread. It is also not purely cosmetic: unpickling an
+    estimator across versions is not guaranteed faithful, and when it is
+    not, it fails silently rather than raising.
+
+    If this fails after a scikit-learn upgrade, re-save the bundle and
+    confirm nothing moved:
+
+        python scripts/build_pan_african_bundle.py --reexport
+        python -m pytest tests/test_pan_african.py
+    """
+    import warnings
+
+    import joblib
+    from sklearn.exceptions import InconsistentVersionWarning
+
+    path = Settings().pan_african_model_path
+    if not Path(path).exists():
+        pytest.skip("no pan-African bundle present")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        joblib.load(path)
+
+    stale = [w for w in caught if issubclass(w.category, InconsistentVersionWarning)]
+    assert not stale, (
+        f"{len(stale)} estimator(s) were pickled by a different scikit-learn. "
+        "Run: python scripts/build_pan_african_bundle.py --reexport"
     )

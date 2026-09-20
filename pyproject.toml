@@ -48,7 +48,11 @@ speech = [
     "sounddevice>=0.4.6",
     "soundfile>=0.12.1",
     "torch>=2.2.0",
-    "transformers>=4.40.0",
+    # Capped below 5.0: coqui-tts imports a symbol transformers 5.x removed,
+    # and config.toml ships with that voice enabled, so an uncapped resolve
+    # silences seven languages on a fresh install. MMS is unaffected by the
+    # cap. See the `coqui` extra below.
+    "transformers>=4.57,<5",
     "edge-tts>=6.1.0",
 ]
 # Mirrors requirements-ml.txt. The classifier needs ONE thing from the
