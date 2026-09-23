@@ -363,3 +363,35 @@ def test_replies_are_read_in_full_by_default():
     long_answer = "The ambulance number is 10177. " * 60
     assert trim_for_speech(long_answer, DEFAULT_MAX_SPEECH_CHARACTERS) == (long_answer, False)
     assert Settings(".absent.toml").max_speech_characters == 0
+
+
+# --- which language the microphone listens for ----------------------------
+
+
+def test_the_speaker_can_choose_the_recognition_language():
+    """Speech recognition must be told the language before it hears
+    anything. It used to be the previous turn's language only, so the
+    first spoken message was always recognised as English.
+
+    Measured with clear synthesized speech: isiZulu and Afrikaans both
+    failed outright as en-ZA and came back near-perfect as zu-ZA and af-ZA.
+    The recogniser was fine; it was being told the wrong language.
+    """
+    from bao.core.config import DEFAULT_STT_CODES
+    from bao.ui.streamlit_app import SPEAK_AUTO, speech_input_language
+
+    assert speech_input_language("isiZulu", "English", DEFAULT_STT_CODES) == "isiZulu"
+    assert speech_input_language(SPEAK_AUTO, "Afrikaans", DEFAULT_STT_CODES) == "Afrikaans"
+    assert speech_input_language(None, "Sepedi", DEFAULT_STT_CODES) == "Sepedi"
+
+
+def test_a_language_with_no_recogniser_locale_falls_back_to_english():
+    """A pan-African language detected on the previous turn has no locale
+    in the recogniser table. Falling back to English is a known quantity;
+    an arbitrary code is not.
+    """
+    from bao.core.config import DEFAULT_STT_CODES
+    from bao.ui.streamlit_app import SPEAK_AUTO, speech_input_language
+
+    assert speech_input_language(SPEAK_AUTO, "Swahili", DEFAULT_STT_CODES) == "English"
+    assert speech_input_language(SPEAK_AUTO, None, DEFAULT_STT_CODES) == "English"

@@ -166,6 +166,19 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
         )
 
         st.markdown("---")
+        if has_stt_backend():
+            st.subheader("Voice Input")
+            st.selectbox(
+                "I'll speak in",
+                [SPEAK_AUTO, *LABELS],
+                key="stt_language",
+                help=(
+                    "Speech recognition must know the language before it "
+                    "hears you — it cannot detect it. Typed messages are "
+                    "detected automatically and ignore this."
+                ),
+            )
+
         st.subheader("Speech Output")
         st.checkbox(
             "Speak replies",
@@ -324,20 +337,57 @@ def render_message(msg: dict, assistant_avatar: str) -> None:
             st.audio(msg["audio"], format=msg.get("audio_mime", "audio/wav"))
 
 
+SPEAK_AUTO = "Same as my last message"
+
+
+def speech_input_language(choice: str | None, last_language: str | None,
+                          supported: dict[str, str]) -> str:
+    """Which language the recogniser should listen for.
+
+    Speech recognition has to be told the language BEFORE it hears
+    anything — the service takes one locale per request and cannot detect
+    it. This used to be the language of the previous turn only, so the
+    first spoken message was always recognised as English, and switching
+    language mid-conversation was recognised as whatever came before.
+    Measured with clear synthesized speech: isiZulu and Afrikaans both
+    failed outright as en-ZA ("could not understand the audio") and came
+    back near-perfect as zu-ZA and af-ZA. The recogniser was fine; it was
+    being told the wrong language.
+
+    So the speaker can now say which language they will use. The previous
+    turn remains the default, and anything the recogniser has no locale
+    for — a pan-African language detected last turn, say — falls back to
+    English rather than to an arbitrary code.
+    """
+    language = last_language if (not choice or choice == SPEAK_AUTO) else choice
+    return language if language in supported else "English"
+
+
 def _transcribe(settings: Settings, audio_file) -> str | None:
     """Turns a recorded clip into text, or returns None with a visible
     warning. Shared by the in-chat microphone and the legacy recorder so
     both paths behave identically.
     """
+    language = speech_input_language(
+        st.session_state.get("stt_language"),
+        st.session_state.get("last_language", "English"),
+        settings.stt_codes,
+    )
     try:
         text = transcribe_audio_bytes(
             audio_file.getvalue() if hasattr(audio_file, "getvalue") else audio_file.read(),
-            st.session_state.get("last_language", "English"),
+            language,
             settings.stt_codes,
         )
         return text or None
     except Exception as e:
-        st.warning(f"Could not transcribe audio: {e}")
+        # Says which language it listened for, and how to change it. "Could
+        # not understand the audio" alone reads as a microphone fault when
+        # the usual cause is the recogniser expecting a different language.
+        st.warning(
+            f"Could not understand that as {language} ({e}). If you spoke "
+            "another language, choose it under “I'll speak in” in the sidebar."
+        )
         return None
 
 
