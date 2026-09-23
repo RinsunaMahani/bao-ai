@@ -1212,6 +1212,34 @@ def _explain_failure(chosen: str, target_language: str, mms_codes: dict | None, 
     return f"Voice for {target_language} (mms-tts-{code}) failed: {detail[:120]}"
 
 
+SPEAK_AUTO = "Same as my last message"
+
+
+def speech_input_language(choice: str | None, last_language: str | None,
+                          supported: dict[str, str]) -> str:
+    """Which language the recogniser should listen for.
+
+    Speech recognition has to be told the language BEFORE it hears
+    anything — the service takes one locale per request and cannot detect
+    it. This used to be the language of the previous turn only, so the
+    first spoken message was always recognised as English, and switching
+    language mid-conversation was recognised as whatever came before.
+    Measured with clear synthesized speech: isiZulu and Afrikaans both
+    failed outright as en-ZA ("could not understand the audio") and came
+    back near-perfect as zu-ZA and af-ZA. The recogniser was fine; it was
+    being told the wrong language.
+
+    So the speaker can say which language they will use — in the web
+    app from the sidebar, in the console from its menu. Both call this,
+    so the two cannot drift into different rules. The previous
+    turn remains the default, and anything the recogniser has no locale
+    for — a pan-African language detected last turn, say — falls back to
+    English rather than to an arbitrary code.
+    """
+    language = last_language if (not choice or choice == SPEAK_AUTO) else choice
+    return language if language in supported else "English"
+
+
 def transcribe_audio_bytes(
     audio_bytes: bytes, target_language: str = "English", stt_codes: dict | None = None
 ) -> str:

@@ -15,10 +15,12 @@ from bao.core.config import ASSISTANT_LOGO_PATH, LABELS, PAN_AFRICAN_LABELS, Set
 from bao.knowledge.loader import extract_text_from_bytes, has_pdf_support
 from bao.services.language_detector import CompositeLanguageDetector
 from bao.services.speech import (
+    SPEAK_AUTO,
     has_edge_backend,
     has_mms_backend,
     has_stt_backend,
     has_tts_backend,
+    speech_input_language,
     transcribe_audio_bytes,
     tts_availability,
     voice_coverage,
@@ -367,32 +369,6 @@ def render_message(msg: dict, assistant_avatar: str) -> None:
         st.markdown(msg["content"])
         if msg.get("audio"):
             st.audio(msg["audio"], format=msg.get("audio_mime", "audio/wav"))
-
-
-SPEAK_AUTO = "Same as my last message"
-
-
-def speech_input_language(choice: str | None, last_language: str | None,
-                          supported: dict[str, str]) -> str:
-    """Which language the recogniser should listen for.
-
-    Speech recognition has to be told the language BEFORE it hears
-    anything — the service takes one locale per request and cannot detect
-    it. This used to be the language of the previous turn only, so the
-    first spoken message was always recognised as English, and switching
-    language mid-conversation was recognised as whatever came before.
-    Measured with clear synthesized speech: isiZulu and Afrikaans both
-    failed outright as en-ZA ("could not understand the audio") and came
-    back near-perfect as zu-ZA and af-ZA. The recogniser was fine; it was
-    being told the wrong language.
-
-    So the speaker can now say which language they will use. The previous
-    turn remains the default, and anything the recogniser has no locale
-    for — a pan-African language detected last turn, say — falls back to
-    English rather than to an arbitrary code.
-    """
-    language = last_language if (not choice or choice == SPEAK_AUTO) else choice
-    return language if language in supported else "English"
 
 
 def _transcribe(settings: Settings, audio_file) -> str | None:

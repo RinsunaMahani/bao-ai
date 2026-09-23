@@ -378,7 +378,7 @@ def test_the_speaker_can_choose_the_recognition_language():
     The recogniser was fine; it was being told the wrong language.
     """
     from bao.core.config import DEFAULT_STT_CODES
-    from bao.ui.streamlit_app import SPEAK_AUTO, speech_input_language
+    from bao.services.speech import SPEAK_AUTO, speech_input_language
 
     assert speech_input_language("isiZulu", "English", DEFAULT_STT_CODES) == "isiZulu"
     assert speech_input_language(SPEAK_AUTO, "Afrikaans", DEFAULT_STT_CODES) == "Afrikaans"
@@ -391,7 +391,7 @@ def test_a_language_with_no_recogniser_locale_falls_back_to_english():
     an arbitrary code is not.
     """
     from bao.core.config import DEFAULT_STT_CODES
-    from bao.ui.streamlit_app import SPEAK_AUTO, speech_input_language
+    from bao.services.speech import SPEAK_AUTO, speech_input_language
 
     assert speech_input_language(SPEAK_AUTO, "Swahili", DEFAULT_STT_CODES) == "English"
     assert speech_input_language(SPEAK_AUTO, None, DEFAULT_STT_CODES) == "English"
