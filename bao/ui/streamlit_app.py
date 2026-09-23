@@ -78,6 +78,28 @@ def init_system():
     return settings, orchestrator, orchestrator.document_retriever
 
 
+# Session keys that describe the conversation so far, as opposed to the
+# visitor's settings (voice on/off, input language, pan-African toggle),
+# which a new conversation should leave alone.
+_CONVERSATION_KEYS = ("display_messages", "last_latency", "last_timings", "last_language")
+
+
+def start_new_conversation(orchestrator: Orchestrator, state=None) -> None:
+    """Forgets the conversation — both what the page shows and what the
+    model is sent — while keeping the visitor's settings and uploads.
+
+    Both halves have to go together. Clearing only the transcript would
+    leave the model still reading the old exchange with nothing on screen
+    to explain why its answers referred to it; clearing only the memory
+    would leave bubbles on screen the model no longer knows about.
+    """
+    state = st.session_state if state is None else state
+    orchestrator.memory.clear()
+    for key in _CONVERSATION_KEYS:
+        if key in state:
+            del state[key]
+
+
 def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
     with st.sidebar:
         st.image(ASSISTANT_LOGO_PATH, width=120)
@@ -85,6 +107,16 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
         st.caption("Multilingual South African AI Assistant")
         st.caption("Text-first, with optional speech output.")
         st.caption("\"Bao\" — short for baobab: deep roots, offline-first.")
+
+        # There was no way to start over. The last six exchanges are
+        # prepended to every prompt for the rest of the session, so moving
+        # from one topic to the next — or from one demo scenario to the
+        # next — left the model still reading the previous one. Uploaded
+        # documents are deliberately kept: they have their own clear
+        # button, and re-uploading after every new topic would be a chore.
+        if st.button("New conversation", use_container_width=True):
+            start_new_conversation(orchestrator)
+            st.rerun()
         st.markdown("---")
 
         st.subheader("System Status")

@@ -179,3 +179,34 @@ def test_session_orchestrators_inherit_every_tuning_value():
         if field in replaced:
             continue
         assert vars(session)[field] == value, f"{field} did not carry across"
+
+
+def test_a_new_conversation_forgets_the_exchange_but_keeps_settings_and_uploads():
+    """The last six exchanges were prepended to every prompt for the whole
+    session with no way to reset them, so moving to a new topic left the
+    model still reading the old one.
+
+    Transcript and memory must go TOGETHER: clearing only the transcript
+    leaves the model referring to things no longer on screen; clearing
+    only the memory leaves bubbles the model no longer knows about.
+    """
+    from bao.bootstrap import build_orchestrator, for_session
+    from bao.ui.streamlit_app import start_new_conversation
+
+    _, shared = build_orchestrator()
+    session = for_session(shared)
+    session.document_retriever.add_document("notes.txt", "Registration opens in January.")
+    session.handle("what is the capital of South Africa", force_offline=True)
+
+    state = {
+        "display_messages": [{"role": "user", "content": "hi"}],
+        "last_language": "Xitsonga", "last_latency": 12.0, "last_timings": {},
+        # settings - must survive
+        "speech_enabled": False, "stt_language": "isiZulu",
+    }
+    start_new_conversation(session, state)
+
+    assert len(session.memory) == 0
+    assert "display_messages" not in state and "last_language" not in state
+    assert state["speech_enabled"] is False and state["stt_language"] == "isiZulu"
+    assert session.document_retriever.sources == ["notes.txt"], "uploads have their own clear"
