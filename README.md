@@ -67,9 +67,10 @@ instructions.
 
 Bao AI is a South African multilingual assistant built for research,
 accessibility, and offline-first knowledge delivery — combining offline
-TF-IDF retrieval, rule-based language identification (with an optional
-on-device ML upgrade path), and Gemini-powered generation across all 11
-official South African languages.
+TF-IDF retrieval, on-device language identification (an LSTM classifier,
+with a keyword matcher for the short greetings it cannot read), and
+Gemini-powered generation across all 11 spoken official South African
+languages.
 
 ## Why this project stands out
 
@@ -78,12 +79,19 @@ official South African languages.
   [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full diagram and
   the reasoning behind every major design decision.
 - Offline RAG retrieval with local TF-IDF search across a curated South
-  African knowledge base — **100% top-1 self-retrieval accuracy** on the
-  current 52-entry dataset (`python evaluate.py`, reproducible).
+  African knowledge base — **100% top-1 self-retrieval accuracy** over the
+  38 reviewed rows it serves (`python evaluate.py`, reproducible). The
+  knowledge base holds 52 rows; the other 14 are translations awaiting a
+  first-language speaker's review and are deliberately not served until
+  then.
 - A pluggable language detector: an LSTM classifier (trained on the NCHLT
-  South African corpus, 3.29M parameters) as the default, with a
-  zero-dependency keyword heuristic as an automatic fallback — behind the
-  exact same interface (`services/language_detector.py`). Two real,
+  South African corpus, 3.29M parameters) as the default, paired with a
+  zero-dependency keyword matcher — behind the exact same interface
+  (`services/language_detector.py`). The two fail on opposite inputs: the
+  classifier's vocabulary is news sentences, so a lone greeting like
+  "Sawubona" is entirely out of vocabulary to it, while the keyword list
+  knows exactly those words. Pairing them took single-word greetings from
+  6/15 to 14/15 answered in the right language. Two real,
   silent deployment bugs (wrong text preprocessing, wrong output-class
   ordering) were found and fixed by testing against the real model, not
   assumed correct because the training results looked good — see
@@ -413,9 +421,14 @@ column is whatever your run produces.
 
 - Config resolution, model paths, and the Gemini model name all come from
   one place: `core/config.py::Settings`. Nothing else hardcodes them.
-- The knowledge base, TF-IDF vectorizer, and Gemini client are constructed
-  once per process (`st.cache_resource` in the Streamlit UI) instead of
-  being rebuilt on every rerun.
+- The read-only parts of the pipeline — the language classifier, the
+  knowledge base and its TF-IDF index, the Gemini client — are built once
+  per server (`st.cache_resource`) and shared. The parts that hold a
+  visitor's data — conversation memory and uploaded documents — are built
+  per session (`bootstrap.for_session`). `st.cache_resource` is shared
+  across *all* visitors, so an earlier version that handed its object
+  straight to the page let one visitor's conversation and uploads reach
+  the next. See "Sessions and concurrency" in `docs/ARCHITECTURE.md`.
 - Speech synthesis and the ML language detector both degrade gracefully —
   missing `torch`/`transformers`/`tensorflow`/`edge-tts` disables one
   feature, never crashes the app at import time. A speech failure (no
@@ -460,10 +473,13 @@ Stated here so they are read rather than discovered.
   as Nigerian Pidgin. Admitting Luganda would mean relabelling English, so
   24 of 25 languages route correctly and this one does not. Reproduce with
   `python scripts/probe_language_routing.py`.
-- **The Gemini free tier allows 5 requests per minute** on
-  `gemini-3.6-flash`, and a knowledge-base fact translated into another
-  language costs a request of its own. A demo that asks six questions in a
-  minute will be rate-limited on the sixth. The app reports this as a quota
+- **Gemini free-tier quotas are small, and they are per model.** Measured
+  on `gemini-3.6-flash`: 5 requests a minute and 20 a day, which is about
+  one demo. This deployment uses `gemini-3.5-flash`, chosen by measuring
+  availability across the flash models (see `config.toml`); switching
+  `[model].gemini_model` gives a fresh budget because each model has its
+  own. A knowledge-base fact translated into another language costs a
+  request of its own. The app reports this as a quota
   message carrying the provider's own wait time rather than as a failure,
   and does not retry a wait it has been told is long — quick retries would
   spend more of the same quota. Transient 503s (the model being busy) *are*

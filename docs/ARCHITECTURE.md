@@ -138,6 +138,38 @@ a real sentence-embedding model later is a new class behind the same
 interface,
 not a rewrite.
 
+## Sessions and concurrency
+
+The web app serves every visitor from one Python process, each session on
+its own thread. Two rules follow, and both were learned from bugs rather
+than designed in up front.
+
+**Shared by mutability, not by cost.** `@st.cache_resource` is shared
+across all visitors. The read-only parts of the pipeline — the TFLite
+classifier, the fitted knowledge base, the API client, the guardrails —
+are identical for everyone and expensive to build, so they are cached and
+shared. The parts that hold one visitor's data are not:
+`bootstrap.for_session` gives each session its own `ConversationMemory`,
+its own `DocumentRetriever`, and its own copy of the detector's on/off
+toggle. Before this split, a second visitor's prompt carried the first
+visitor's conversation, and a private file one visitor uploaded was
+retrievable by the next — invisibly, because the chat transcript on screen
+was always per-session.
+
+`for_session` copies the orchestrator rather than re-listing its
+constructor, so a tuning parameter added later cannot silently stop
+reaching sessions; a test asserts every non-session field carries across.
+
+**Shared objects must be safe to use concurrently.** TFLite inference is
+three stateful calls on one interpreter (`set_tensor`, `invoke`,
+`get_tensor`) and is not reentrant: with three threads detecting at once,
+two raised inside LiteRT. It is serialised with a lock — inference takes
+about a millisecond, while an interpreter per session would cost seconds
+and ~13 MB each. The output is copied inside the lock, because
+`get_tensor` returns a view onto the interpreter's own buffer. The voice
+models (MMS and the Coqui VITS) were put under the same concurrent load
+and did not need a lock, so they do not have one.
+
 ## Sign language — removed
 
 A static hand-shape prototype (MediaPipe hand landmarks feeding a
