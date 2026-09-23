@@ -657,3 +657,30 @@ def test_requests_with_more_after_the_name_are_still_recognised(query, expected)
     from bao.services.language_detector import named_target_language
 
     assert named_target_language(query) == expected
+
+
+def test_the_badge_says_why_the_reply_language_differs():
+    """Two reasons can make the reply language differ from the detected
+    one, and they mean opposite things.
+
+    The badge was written when a weak detection was the only reason, so
+    "explain calculus in xitsonga" — English at 83%, with Xitsonga asked
+    for — produced "too unsure to use" on a confident detection. That is
+    the line an examiner reads as the detector being broken.
+    """
+    from bao.ai.orchestrator import PipelineResult
+    from bao.ui.streamlit_app import _format_detection_badge
+
+    asked = PipelineResult(
+        text="...", detected_language="English", confidence=0.83,
+        detection_backend="tflite", source="gemini", latency_ms=0,
+        reply_language="Xitsonga", language_was_requested=True)
+    badge = _format_detection_badge(asked)
+    assert "you asked for Xitsonga" in badge
+    assert "unsure" not in badge
+
+    weak = PipelineResult(
+        text="...", detected_language="siSwati", confidence=0.35,
+        detection_backend="tflite", source="gemini", latency_ms=0,
+        reply_language="English")
+    assert "too unsure to use, replying in English" in _format_detection_badge(weak)

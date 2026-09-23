@@ -349,10 +349,17 @@ def _format_detection_badge(result) -> str:
         )
     else:
         detection_part = f"Language: {result.detected_language}"
-    # When detection was too weak to act on, say so. Otherwise the badge
-    # claims a language the reply was not actually written in.
+    # When the reply is in a different language from the one detected, say
+    # WHY — there are now two reasons, and they mean opposite things.
+    # This was written when a weak detection was the only one, so asking
+    # "explain calculus in xitsonga" (English at 83%) produced a badge
+    # claiming 83% was "too unsure to use": false, and exactly the kind of
+    # line an examiner reads as the detector being broken.
     if result.reply_language and result.reply_language != result.detected_language:
-        detection_part += f" — too unsure to use, replying in {result.reply_language}"
+        if result.language_was_requested:
+            detection_part += f" — you asked for {result.reply_language}"
+        else:
+            detection_part += f" — too unsure to use, replying in {result.reply_language}"
     badge = f"{detection_part} · source: {result.source}"
     # Cross-lingual turns ("explain X in Xitsonga") answer in a different
     # language from the question. Showing it makes a wrong voice obvious.
