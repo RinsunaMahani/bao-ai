@@ -79,9 +79,33 @@ Two interchangeable implementations behind one interface:
   evaluation and a real deployment-bug story worth reading before citing
   the underlying model's training-time accuracy figure as this
   deployment's own.
-- **Heuristic (automatic fallback):** keyword-marker matching across all
-  11 languages, zero model-loading cost, used automatically if the ML
-  model or its tokenizer files are missing.
+- **Keyword matcher (paired with the classifier):** marker-word matching
+  across all 11 languages, with zero model-loading cost. It stands in
+  entirely if the model or its tokenizer files are missing, and it also
+  answers, at runtime, the input the classifier cannot read. The
+  classifier's vocabulary comes from NCHLT news sentences, so a lone
+  greeting such as "Sawubona" or "Avuxeni" is wholly out of vocabulary to
+  it and it returns the same constant prior for all of them — measured,
+  nine greetings across eight languages all came back as siSwati at
+  exactly 35%. The keyword list contains precisely those words. It is
+  consulted only when the classifier is unsure and only when it actually
+  recognised a word, and it can never overrule a confident classification.
+  Single-word greetings went from 6/15 to 14/15 answered in the right
+  language; the remaining miss, "Dumela", is the greeting in Sepedi,
+  Sesotho and Setswana alike and cannot be resolved from the word alone.
+- **Pan-African extension (optional):** a character n-gram classifier for
+  14 further languages (Amharic, French, Hausa, Igbo, Lingala, Luganda,
+  Oromo, Nigerian Pidgin, Kirundi, Shona, Somali, Swahili, Tigrinya,
+  Yoruba). The two models are not calibrated against each other, so their
+  confidences are never compared directly; the pan-African model's own
+  confidence decides, with a threshold taken from measurement — it never
+  exceeded 44% on 24 South African inputs, and was correct on all 14
+  pan-African sentences tested at 43–89%. Walking one sentence per language
+  through the whole pipeline (`scripts/probe_language_routing.py`), 24 of
+  25 are answered in the language they were written in. Luganda is the
+  miss: identified correctly but at 43%, just under the 44% English
+  reaches as Nigerian Pidgin, and admitting it would mean relabelling
+  English.
 
 ### 3.3 Generation
 
@@ -93,10 +117,18 @@ The model in use is centrally configured (`config.toml` /
 
 Text-to-speech output is implemented as a genuinely optional capability:
 absent dependencies or missing trained assets degrade the specific
-feature, never the core application. Two backends are selected per
-language — Microsoft's neural voices (online, real en-ZA/af-ZA/zu-ZA) and
-Meta's MMS-TTS (offline) — and the seven languages with no open voice
-model are reported as such rather than silently substituted.
+feature, never the core application. Three backends are selected per
+language, each only where it is the best available: Microsoft's neural
+voices (online; real en-ZA, af-ZA and zu-ZA locales), Meta's MMS-TTS
+(offline; Xitsonga, and twelve of the pan-African languages), and a
+multilingual South African VITS model covering all eleven, enabled in this
+deployment for the seven that have no other voice. A voice is chosen from
+the language the reply is SPOKEN in — its opening — rather than from every
+language that appears in it, because replies routinely quote lyrics or
+terms in another language. Where no voice exists the interface says so
+rather than substituting one silently. Replies are read in full: for a
+user who cannot easily read the screen the voice is the answer, not a
+flourish on it.
 
 A static, single-frame sign-language hand-shape classifier (MediaPipe
 hand landmarks feeding a small scikit-learn classifier) was prototyped
@@ -214,8 +246,9 @@ This 20/20 result is real, reproducible evidence, but it is not the same
 claim as "0.98 Macro F1 confirmed for this deployment" — the original
 63,613-sentence held-out test set isn't available to re-run here. The
 model is the default detector in the running application
-(`prefer_ml=True`), with the heuristic as an automatic fallback if the
-model or tokenizer files are ever missing, on the strength of the 20/20
+(`prefer_ml=True`), paired with the keyword matcher for input it cannot
+read and replaced by it if the model or tokenizer files are ever missing
+(Section 3.2), on the strength of the 20/20
 evidence and the independently-confirmed architecture match — not on the
 strength of the unreproduced training-time number alone.
 
