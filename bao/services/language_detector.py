@@ -218,10 +218,23 @@ def named_target_language(query: str) -> str | None:
     The user stated their language explicitly. That should outrank a guess
     about the language they happened to type the request in.
 
-    Deliberately narrow: it requires the preposition immediately before a
-    known language name, so "how many official languages does South Africa
-    have" is unaffected. Matching is case-insensitive because people type
-    "xitsonga" and "Xitsonga" interchangeably.
+    Deliberately narrow, in two ways.
+
+    It needs the preposition immediately before a known language name, so
+    "how many official languages does South Africa have" is unaffected.
+
+    And it needs the name to END the phrase — followed by the end of the
+    text, punctuation, or a function word — because many of these names
+    double as adjectives. "I am interested in French cuisine", "a degree in
+    English literature" and "recipes popular in Somali culture" all put a
+    language name straight after "in", and all five sentences like them
+    were read as requests to switch the reply language until this was
+    added. The difference is what comes next: a request is followed by
+    nothing, or by "please", "for a grade 10 learner", "with examples",
+    "how it works"; a mention is followed by the noun the name describes.
+
+    Matching is case-insensitive because people type "xitsonga" and
+    "Xitsonga" interchangeably.
     """
     global _TARGET_LANGUAGE_RE
     if _TARGET_LANGUAGE_RE is None:
@@ -231,7 +244,20 @@ def named_target_language(query: str) -> str | None:
         # name that happens to be a prefix of it.
         names = sorted(LABELS + PAN_AFRICAN_LABELS, key=len, reverse=True)
         pattern = "|".join(re.escape(n.lower()) for n in names)
-        _TARGET_LANGUAGE_RE = re.compile(rf"\bin\s+({pattern})\b", re.IGNORECASE)
+        # What may follow the name for it to count as a request. Function
+        # words only — a noun here means the name is describing that noun.
+        # "and" is left out on purpose: "fluent in isiZulu and English" is
+        # a description of a person, not an instruction.
+        followers = (
+            "please|pls|plz|language|languages|only|for|so|too|instead|now|"
+            "thanks|thank|again|if|because|rather|as|with|without|"
+            "what|how|why|when|where|who|which|about"
+        )
+        _TARGET_LANGUAGE_RE = re.compile(
+            rf"\bin\s+({pattern})"
+            rf"(?=\s*$|\s*[.,!?;:)\]\"'»”’]|\s+(?:{followers})\b)",
+            re.IGNORECASE,
+        )
 
     match = _TARGET_LANGUAGE_RE.search(query)
     if not match:

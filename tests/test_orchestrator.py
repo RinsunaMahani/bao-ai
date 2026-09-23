@@ -619,3 +619,41 @@ def test_a_requested_language_pins_the_voice():
     result = orch.handle("explain calculus in Xitsonga")
     assert result.language_was_requested is True
     assert result.reply_language == "Xitsonga"
+
+
+@pytest.mark.parametrize("query", [
+    "I am interested in French cuisine",
+    "I have a degree in English literature",
+    "she is fluent in isiZulu and English",
+    "recipes popular in Somali culture",
+    "is there a bursary for studies in Afrikaans literature",
+])
+def test_a_language_used_as_an_adjective_is_not_a_request(query):
+    """Many language names double as adjectives, and every one of these
+    put a name straight after "in" — so all five were read as requests to
+    switch the reply language. "I am interested in French cuisine" would
+    have been answered in French.
+
+    What follows the name is the difference: a mention is followed by the
+    noun it describes, a request by nothing or by a function word.
+    """
+    from bao.services.language_detector import named_target_language
+
+    assert named_target_language(query) is None
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("explain calculus in xitsonga for a grade 10 learner", "Xitsonga"),
+    ("explain in isiZulu how photosynthesis works", "isiZulu"),
+    ("tell me in Xitsonga about the history of Limpopo", "Xitsonga"),
+    ("answer in Setswana with examples", "Setswana"),
+    ('say "hello" in isiXhosa', "isiXhosa"),
+    ("in Sepedi, explain photosynthesis", "Sepedi"),
+])
+def test_requests_with_more_after_the_name_are_still_recognised(query, expected):
+    """Tightening against adjectives must not lose real requests that
+    carry on past the language name.
+    """
+    from bao.services.language_detector import named_target_language
+
+    assert named_target_language(query) == expected
