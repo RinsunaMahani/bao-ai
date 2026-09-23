@@ -684,3 +684,33 @@ def test_the_badge_says_why_the_reply_language_differs():
         detection_backend="tflite", source="gemini", latency_ms=0,
         reply_language="English")
     assert "too unsure to use, replying in English" in _format_detection_badge(weak)
+
+
+def test_answers_do_not_depend_on_the_audio_stack(monkeypatch):
+    """The README states that Bao is text-first and that removing the
+    whole speech stack changes nothing about the answers. That is the
+    property Deaf users actually rely on, so it is pinned rather than
+    asserted: the same questions must produce the same text and source
+    with every speech backend present and with every one absent, and
+    speaking must degrade with a stated reason rather than raise.
+    """
+    import bao.services.speech as speech
+    from bao.bootstrap import build_orchestrator, for_session
+
+    _, shared = build_orchestrator()
+    questions = ["Avuxeni", "Sawubona", "what are the emergency numbers in south africa"]
+
+    with_audio = [for_session(shared).handle(q, force_offline=True) for q in questions]
+
+    for flag in ("_HAS_MMS_BACKEND", "_HAS_EDGE_BACKEND", "_HAS_STT_BACKEND",
+                 "_HAS_COQUI_BACKEND"):
+        monkeypatch.setattr(speech, flag, False)
+    silent_session = for_session(shared)
+    without_audio = [silent_session.handle(q, force_offline=True) for q in questions]
+
+    for a, b in zip(with_audio, without_audio):
+        assert (a.text, a.source) == (b.text, b.source)
+
+    spoken = silent_session.speak(without_audio[0])
+    assert spoken.audio is None
+    assert spoken.speech_error, "a missing voice must be explained, not silent"

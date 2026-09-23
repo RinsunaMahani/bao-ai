@@ -134,8 +134,20 @@ A static, single-frame sign-language hand-shape classifier (MediaPipe
 hand landmarks feeding a small scikit-learn classifier) was prototyped
 and then **removed**; it was never trained, and static hand poses cannot
 represent a language whose vocabulary is movement and whose grammar is
-carried partly by non-manual markers. See "Sign language — removed" in
-`docs/ARCHITECTURE.md` for the full reasoning.
+carried partly by non-manual markers.
+
+South African Sign Language is therefore not supported, and the reason
+was checked rather than assumed. No public SASL dataset exists: the field's
+own dataset catalogue lists none, against roughly 8–10 for ASL. The only
+SASL video corpus found — 5,047 sentences, about five hours, from a 2024
+University of Cape Town master's thesis — is not publicly released, and
+the thesis's own sign-to-text result on it is BLEU-4 1.35, described by
+its author as "very far from practical" (the same approach scores 13.23 on
+a German benchmark). The leading open-source text↔sign system, sign.mt,
+works reasonably well for American, German and Brazilian sign languages
+only. The blocker is data and Deaf-community partnership, not tooling:
+MediaPipe installs and runs on this project's Python. Sources and the full
+reasoning are in "Accessibility and SASL" in `docs/ARCHITECTURE.md`.
 
 ## 4. Evaluation
 
@@ -318,6 +330,10 @@ question — all verified to behave correctly with no exceptions.
   considering it for production use.
 - Query resolution against conversation memory before knowledge-base
   retrieval, not just before Gemini generation.
-- Continuous/dynamic sign-language recognition, requiring sequence
-  modeling rather than single-frame classification — a materially larger
-  project than the current static prototype.
+- South African Sign Language. Continuous recognition needs pose, hand
+  and face tracking with a sequence model, and a public annotated SASL
+  corpus that does not yet exist — so the first step is building one with
+  the Deaf community, not writing a model. A narrower, feasible piece is
+  SASL fingerspelling (the one-handed manual alphabet), but it needs
+  self-recorded data from several signers checked letter by letter by a
+  SASL signer, and it covers spelling rather than conversation.

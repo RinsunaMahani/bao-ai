@@ -440,6 +440,35 @@ column is whatever your run produces.
 - Structured JSON logging (`core/logging.py`) carries live CPU/RAM
   telemetry on every log line.
 
+## Accessibility and SASL
+
+South African Sign Language became the 12th official language on 19 July
+2023. **Bao does not support it**, and that was checked rather than
+assumed:
+
+- **No public SASL dataset exists.** The field's own dataset catalogue
+  lists none, against roughly 8–10 for American Sign Language. A 2014
+  University of Cape Town dataset is data-glove sensor readings (it cannot
+  train a camera-based system), and a 2024 UCT corpus of 5,047 signed
+  sentences was never publicly released.
+- **The state of the art is not yet usable.** That 2024 thesis reports
+  sign-to-text translation at **BLEU-4 1.35** on its own corpus, "very far
+  from practical" in the author's words; the same method scores 13.23 on
+  a German benchmark.
+- **Open tools do not cover it.** sign.mt, the leading open-source
+  text↔sign system, works reasonably well for American, German and
+  Brazilian sign languages only.
+- **Tooling is not the blocker; data is.** MediaPipe installs and runs on
+  this project's Python. What is missing is an annotated corpus, and the
+  Deaf-community partnership needed to build one properly.
+
+What Bao does offer Deaf users is that it is **text-first and works fully
+with no audio at all** — every answer is on screen before any voice
+begins, and removing the whole speech stack changes nothing about the
+answers. Full reasoning, the one narrow feasible piece (fingerspelling)
+and why it alone should not be called SASL support, plus sources:
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), "Accessibility and SASL".
+
 ## Known limitations
 
 Stated here so they are read rather than discovered.
@@ -502,13 +531,9 @@ Stated here so they are read rather than discovered.
 
 ## Next improvements
 
-- **South African Sign Language** — SASL became the country's 12th official
-  language in 2023, so a complete multilingual assistant should eventually
-  support it. A static hand-shape prototype was removed from this codebase
-  because it was never trained: usable recognition needs continuous video
-  (most SASL vocabulary is movement, not a pose) and non-manual markers
-  carried on the face, which hand landmarks cannot see. That is a separate
-  project rather than a feature of this one.
+- **South African Sign Language** — the right long-term direction, and
+  blocked on data rather than code: see "Accessibility and SASL" above.
+  The first step is an annotated corpus built with the Deaf community.
 - Swap `knowledge/embeddings.py`'s TF-IDF implementation for a real
   multilingual sentence-embedding model to close the false-positive gap
   documented above.
