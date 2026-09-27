@@ -1,32 +1,36 @@
 {
-  "timestamp": "2026-08-08 17:23:34",
-  "gemini_online": false,
+  "timestamp": "2026-09-27 18:31:54",
+  "gemini_online": true,
   "language_detection_accuracy": {
     "unique_cases": 5,
-    "unique_correct": 4,
+    "unique_correct": 5,
     "total_inference_runs": 25,
     "iterations_per_query": 5,
     "note": "unique_correct/unique_cases is the accuracy figure; total_inference_runs is for latency only"
   },
   "detector_comparison": {
     "heuristic": {
-      "correct": 8,
-      "total": 10
+      "correct": 4,
+      "total": 5
+    },
+    "tflite": {
+      "correct": 5,
+      "total": 5
     }
   },
   "memory": {
-    "baseline_mb": 308.04296875,
-    "final_mb": 308.06640625,
-    "peak_traced_mb": 0.055861473083496094
+    "baseline_mb": 720.66796875,
+    "final_mb": 722.359375,
+    "peak_traced_mb": 0.762608528137207
   },
   "latencies_ms": {
     "pipeline": {
-      "mean": 2.7820225999994364,
-      "p95": 3.4037120000078858
+      "mean": 1974.3016400013585,
+      "p95": 14755.935599998338
     },
     "language_detection": {
-      "mean": 0.5192264799995883,
-      "p95": 0.6817219999959434
+      "mean": 1.3572559983003885,
+      "p95": 1.5530000091530383
     }
   }
 }
