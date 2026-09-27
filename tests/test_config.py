@@ -98,3 +98,51 @@ def test_the_code_default_model_is_the_one_config_toml_chose():
     from bao.core.config import GEMINI_MODEL_DEFAULT, Settings
 
     assert Settings().gemini_model == GEMINI_MODEL_DEFAULT
+
+
+def test_the_docker_image_contains_every_file_the_app_loads():
+    """.dockerignore excluded the whole of docs/, and the web app loads its
+    logo from docs/assets/. The image therefore could never render the page,
+    and its health check - which reports the server, not the page - said
+    nothing. A runtime file excluded from the build context is invisible
+    until someone opens the app in a browser.
+
+    Docker patterns are matched here with fnmatch against the path and each
+    of its parent directories, which is enough for the simple patterns this
+    project uses; `!` exceptions re-include.
+    """
+    import fnmatch
+    from pathlib import Path
+
+    from bao.core.config import ASSISTANT_LOGO_PATH, BASE_DIR, Settings
+
+    repo = Path(BASE_DIR)
+    s = Settings()
+    runtime_files = [
+        ASSISTANT_LOGO_PATH, s.knowledge_base_path, s.classifier_model_path,
+        s.tokenizer_config_path, s.pan_african_model_path, str(repo / "config.toml"),
+        str(repo / "bao" / "ui" / "streamlit_app.py"),
+    ]
+    patterns = [
+        line.strip() for line in (repo / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+    def excluded(rel: str) -> bool:
+        parts = rel.split("/")
+        candidates = ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
+        verdict = False
+        for pattern in patterns:
+            negate = pattern.startswith("!")
+            body = pattern[1:] if negate else pattern
+            body = body.rstrip("/")
+            if any(fnmatch.fnmatch(c, body) for c in candidates):
+                verdict = not negate
+        return verdict
+
+    missing = [
+        rel for rel in (Path(f).resolve().relative_to(repo.resolve()).as_posix()
+                        for f in runtime_files)
+        if excluded(rel)
+    ]
+    assert not missing, f".dockerignore excludes files the app loads at runtime: {missing}"

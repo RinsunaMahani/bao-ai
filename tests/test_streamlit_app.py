@@ -88,3 +88,21 @@ def test_clearing_uploads_keeps_the_visitors_settings(page):
     assert not page.exception, [str(e.value) for e in page.exception]
     assert len(page.session_state["orchestrator"].document_retriever) == 0
     assert _settings(page) == before
+
+
+def test_the_page_survives_a_missing_logo(monkeypatch):
+    """Every Docker image excluded docs/, where the logo lives, and
+    Streamlit raised MediaFileStorageError on the first page load - so the
+    containerised app never rendered at all. The logo is decoration; its
+    absence must not take the page down.
+    """
+    import bao.core.config as config
+
+    monkeypatch.setattr(config, "ASSISTANT_LOGO_PATH", "/app/docs/assets/absent-logo.jpg")
+    at = AppTest.from_file(APP, default_timeout=TIMEOUT)
+    at.run()
+    at.sidebar.checkbox(key="speech_enabled").uncheck().run()
+    at.chat_input[0].set_value("Avuxeni").run()   # exercises the chat avatar too
+
+    assert not at.exception, [str(e.value) for e in at.exception]
+    assert [m for m in at.chat_message if m.name == "assistant"]

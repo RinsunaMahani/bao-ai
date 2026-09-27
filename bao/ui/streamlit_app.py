@@ -5,6 +5,7 @@ Run with: streamlit run bao/ui/streamlit_app.py
 """
 
 import inspect
+import os
 
 import psutil
 import streamlit as st
@@ -36,9 +37,27 @@ USER_AVATAR = ":material/person:"
 # of crashing on an unexpected keyword.
 _CHAT_INPUT_HAS_MIC = "accept_audio" in inspect.signature(st.chat_input).parameters
 
+# The logo is decoration, and a missing decoration must not take the page
+# down. When the file was absent - as it was in every Docker image, which
+# excluded docs/ - Streamlit raised MediaFileStorageError on the first load
+# and nothing rendered at all. Each use now falls back when it is missing.
+_LOGO = ASSISTANT_LOGO_PATH if os.path.exists(ASSISTANT_LOGO_PATH) else None
+_FALLBACK_AVATAR = ":material/park:"
+
+
+def resolve_avatar(configured: str) -> str:
+    """The configured avatar, or a built-in icon if it names a file that
+    is not there. Emoji and ":material/...:" icons pass through as given.
+    """
+    looks_like_a_file = os.sep in configured or "/" in configured or "." in configured
+    if looks_like_a_file and not os.path.exists(configured):
+        return _FALLBACK_AVATAR
+    return configured
+
+
 st.set_page_config(
     page_title="Bao AI — Multilingual Assistant",
-    page_icon=ASSISTANT_LOGO_PATH,
+    page_icon=_LOGO or "🌳",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -104,7 +123,8 @@ def start_new_conversation(orchestrator: Orchestrator, state=None) -> None:
 
 def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
     with st.sidebar:
-        st.image(ASSISTANT_LOGO_PATH, width=120)
+        if _LOGO:
+            st.image(_LOGO, width=120)
         st.title("Bao AI")
         st.caption("Multilingual South African AI Assistant")
         st.caption("Text-first, with optional speech output.")
@@ -453,7 +473,7 @@ def _handle_turn(
     with st.chat_message("user", avatar=USER_AVATAR):
         st.markdown(display_prefix + user_input)
 
-    with st.chat_message("assistant", avatar=settings.assistant_avatar):
+    with st.chat_message("assistant", avatar=resolve_avatar(settings.assistant_avatar)):
         placeholder = st.empty()
         placeholder.markdown(thinking_indicator_html(), unsafe_allow_html=True)
 
@@ -568,7 +588,7 @@ def main() -> None:
     render_legacy_voice_input(settings, orchestrator)
 
     for msg in st.session_state.display_messages:
-        render_message(msg, assistant_avatar=settings.assistant_avatar)
+        render_message(msg, assistant_avatar=resolve_avatar(settings.assistant_avatar))
 
     submitted = render_chat_input(settings)
     if submitted:

@@ -31,8 +31,17 @@ venv/
 .idea/
 .DS_Store
 
-# Not needed at runtime; excluded to keep the image small and the build fast
-docs/
+# Not needed at runtime; excluded to keep the image small and the build fast.
+#
+# Listed file by file rather than as `docs/`: the web app loads its logo
+# from docs/assets/logo.jpg for the page icon, sidebar and chat avatar, and
+# excluding the whole directory meant the image could never render the
+# page - Streamlit raised MediaFileStorageError on the first load. The
+# health check did not notice, because /_stcore/health reports the server,
+# not the page. tests/test_config.py now fails if any file the app loads
+# at runtime is excluded here.
+docs/*.md
+docs/training/
 eval/report.md
 benchmark_results.json
 
