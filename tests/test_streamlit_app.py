@@ -13,10 +13,18 @@ reaches. So the button silently switched "Speak replies" back on and reset
 because it used a plain dict; AppTest, which runs the real script, caught
 it on the first try.
 
+Version note, measured rather than assumed: the widget-state loss happens
+on Streamlit 1.59, the version on the machine this app is presented from,
+and not on 1.64, which CI installs. So the settings tests below catch that
+regression on 1.59 and simply pass on 1.64 either way. The callback fix
+is correct on both, and is Streamlit's own recommended pattern.
+
 These tests need no network. The questions are answered from the curated
 knowledge base, and speech is switched off before anything is asked.
 """
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
@@ -24,14 +32,36 @@ pytest.importorskip("streamlit.testing.v1")
 
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
-APP = "bao/ui/streamlit_app.py"
+# Absolute, built from this file. AppTest resolved a relative path against
+# the working directory in Streamlit 1.59 and against the CALLING FILE in
+# 1.64 - so "bao/ui/streamlit_app.py" worked locally and pointed at
+# tests/bao/ui/... under the Streamlit CI installs, failing every test here.
+APP = str(Path(__file__).resolve().parent.parent / "bao" / "ui" / "streamlit_app.py")
 # The first run builds the whole pipeline (classifier, knowledge base,
 # detector bundle), which takes several seconds on a cold cache.
 TIMEOUT = 300
 
 
 @pytest.fixture
-def page():
+def voice_controls(monkeypatch):
+    """Makes the voice settings interactive whatever is installed.
+
+    "Speak replies" is disabled, and "I'll speak in" not drawn at all, on a
+    machine without speech libraries - CI among them. Streamlit 1.64's
+    AppTest refuses to change a disabled widget (1.59 allowed it), so the
+    settings tests either errored or, worse, could only exercise the one
+    setting that survived the original bug by coincidence. Declaring the
+    backends present lets every environment check every setting. Nothing
+    is synthesized: speech is switched off before anything is asked.
+    """
+    import bao.services.speech as speech
+
+    monkeypatch.setattr(speech, "_HAS_EDGE_BACKEND", True)
+    monkeypatch.setattr(speech, "_HAS_STT_BACKEND", True)
+
+
+@pytest.fixture
+def page(voice_controls):
     at = AppTest.from_file(APP, default_timeout=TIMEOUT)
     at.run()
     assert not at.exception, [str(e.value) for e in at.exception]
@@ -62,12 +92,11 @@ def test_a_greeting_is_answered_in_its_own_language(page):
 
 def test_new_conversation_keeps_the_visitors_settings(page):
     """The regression this file exists for."""
-    speak_in = [s for s in page.sidebar.selectbox if s.key == "stt_language"]
-    if speak_in:  # only drawn when speech recognition is installed
-        speak_in[0].set_value("isiZulu").run()
+    page.sidebar.selectbox(key="stt_language").set_value("isiZulu").run()
     page.chat_input[0].set_value("Avuxeni").run()
     before = _settings(page)
     assert before["speech_enabled"] is False
+    assert before["stt_language"] == "isiZulu"
 
     [b for b in page.sidebar.button if b.label == "New conversation"][0].click().run()
 
@@ -90,7 +119,7 @@ def test_clearing_uploads_keeps_the_visitors_settings(page):
     assert _settings(page) == before
 
 
-def test_the_page_survives_a_missing_logo(monkeypatch):
+def test_the_page_survives_a_missing_logo(monkeypatch, voice_controls):
     """Every Docker image excluded docs/, where the logo lives, and
     Streamlit raised MediaFileStorageError on the first page load - so the
     containerised app never rendered at all. The logo is decoration; its

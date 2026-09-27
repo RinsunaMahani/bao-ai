@@ -17,8 +17,13 @@ only run where TensorFlow is installed. It skips otherwise — so it does
 nothing in a core-only environment and everything on a machine with
 `requirements-ml.txt` installed.
 
-**Run this on the machine you present from.** It is the difference between
-"our tokenizer should match" and "our tokenizer provably matches".
+**Status: verified.** First run on 2026-09-27 against TensorFlow 2.21 and
+Keras 3.15 (Python 3.12): all ten cases matched exactly. It skips on the
+project's development machine, which runs Python 3.14 - TensorFlow has no
+3.14 wheels - so CI's Python 3.11 job installs TensorFlow and runs it on
+every push instead. Under Keras 3 the Tokenizer lives in a `legacy` module
+but is still importable as below; the CI install is pinned to the series
+this was verified against in case a later Keras removes it.
 
 The remaining tests need no TensorFlow and always run: they pin the
 specific semantics that are easy to get subtly wrong.

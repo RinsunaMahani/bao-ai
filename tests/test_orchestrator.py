@@ -174,8 +174,16 @@ def test_handle_does_not_synthesize_speech_unless_asked(orchestrator, monkeypatc
 
 
 def test_speak_attaches_audio_to_a_finished_result(orchestrator, monkeypatch):
+    import bao.services.speech as speech
     from bao.services.speech import SpeechAudio
 
+    # speak() consults the voice tiers before it synthesizes anything, and
+    # with no speech libraries installed English has no voice, so the fake
+    # synthesis below was never reached. This passed wherever edge-tts or
+    # MMS happened to be installed and failed where they were not - CI
+    # among them. The test is about attaching audio, not about which
+    # packages are present, so it says English is speakable.
+    monkeypatch.setattr(speech, "_HAS_EDGE_BACKEND", True)
     monkeypatch.setattr(
         "bao.ai.orchestrator.synthesize_speech",
         lambda *a, **k: SpeechAudio(data=b"RIFFfake", mime="audio/mpeg"),
