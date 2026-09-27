@@ -8,19 +8,17 @@ values from here instead of declaring independent defaults.
 import logging
 import os
 
+# Standard library from Python 3.11, which is this project's floor. It
+# used to fall back to tomli, which nothing installed, so on 3.10
+# config.toml was silently ignored; the floor was raised instead of the
+# fallback being patched - see pyproject.toml.
+import tomllib
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
-
-try:
-    import tomllib
-except ImportError:
-    try:
-        import tomli as tomllib
-    except ImportError:
-        tomllib = None
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -104,9 +102,6 @@ class Settings:
     def _load(self) -> None:
         if not os.path.exists(self.config_path):
             logging.warning(f"Configuration file not found at '{self.config_path}'. Using defaults.")
-            return
-        if tomllib is None:
-            logging.error("TOML parser not available. Install 'tomli' or use Python 3.11+.")
             return
         try:
             with open(self.config_path, "rb") as f:

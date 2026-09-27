@@ -11,7 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.12"]
+        # The declared floor, and the newest version the project is
+        # developed on. Two entries, not three: each job pulls the LFS
+        # model assets, against a small monthly bandwidth quota.
+        python-version: ["3.11", "3.14"]
 
     steps:
       - uses: actions/checkout@v4

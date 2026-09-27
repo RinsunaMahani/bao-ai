@@ -45,7 +45,7 @@ import json
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -160,7 +160,7 @@ def measure_lint() -> dict:
 def build_scorecard() -> dict:
     _, orchestrator = build_orchestrator()
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "retrieval": measure_retrieval(orchestrator),
         "self_consistency": measure_self_consistency(orchestrator),
         "latency_offline": measure_latency(orchestrator),

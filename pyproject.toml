@@ -7,7 +7,12 @@ name = "bao-ai"
 version = "0.1.0"
 description = "Multilingual South African AI assistant with offline RAG and voice support."
 readme = "README.md"
-requires-python = ">=3.10"
+# 3.11, not 3.10. tomllib (the config loader) and scikit-learn 1.8+ (which
+# the pickled pan-African detector needs) both require it; on 3.10 the
+# config was silently ignored and pip resolved scikit-learn 1.7.2, too old
+# to load the bundle faithfully. Python 3.10 reaches end of life in
+# October 2026. CI tests this floor and the newest version in use.
+requires-python = ">=3.11"
 # Core dependencies: the app runs (offline knowledge retrieval + heuristic
 # language detection, no speech, no ML classifier) with just these.
 #
@@ -20,12 +25,9 @@ dependencies = [
     "streamlit>=1.40.0",
     "google-genai>=0.1.1",
     "python-dotenv>=1.0.1",
-    # tomllib is 3.11+. Without this, config.toml is silently ignored on
-    # 3.10 - see requirements.txt.
-    "tomli>=1.1.0; python_version < '3.11'",
-    # 1.6+ so the pan-African detector bundle loads without an
-    # InconsistentVersionWarning (requirements.txt carries the same floor).
-    "scikit-learn>=1.6.0",
+    # Pinned to the minor series the pan-African bundle was pickled in;
+    # see requirements.txt, which carries the same range and the reason.
+    "scikit-learn>=1.9,<1.10",
     # Imported by name in services/language_detector.py to load that
     # bundle, so it is declared rather than leaned on as a transitive
     # scikit-learn dependency.
@@ -98,7 +100,7 @@ find = {}
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

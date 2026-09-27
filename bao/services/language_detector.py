@@ -49,6 +49,7 @@ import json
 import os
 import re
 import threading
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -472,6 +473,61 @@ PAN_AFRICAN_LANGUAGE_NAMES = {
 }
 
 
+def _minor(version: str) -> tuple[int, ...]:
+    """(major, minor) of a version string, ignoring the patch level."""
+    return tuple(int(part) for part in re.findall(r"\d+", version)[:2])
+
+
+def sklearn_minor_mismatches(caught) -> list[tuple[str, str]]:
+    """(pickled, installed) scikit-learn versions that differ in MAJOR or
+    MINOR version, from warnings recorded while unpickling.
+
+    scikit-learn warns on ANY version difference when loading a pickle,
+    patch-level included. A patch difference is routine — CI installs the
+    newest 1.9.x while a bundle saved under 1.9.0 is still read faithfully —
+    so treating every warning as a fault turned the suite red each time a
+    patch shipped. A minor difference is the real risk: on Python 3.10, pip
+    can only install scikit-learn 1.7.2, and a 1.9 pickle loaded by 1.7 is
+    the unsafe direction, where failure is silent rather than raised.
+
+    One rule, used by the loader below and by the test that guards it.
+    """
+    mismatches = []
+    for record in caught:
+        if type(record.message).__name__ != "InconsistentVersionWarning":
+            continue
+        pickled = getattr(record.message, "original_sklearn_version", "")
+        installed = getattr(record.message, "current_sklearn_version", "")
+        if _minor(pickled) != _minor(installed):
+            mismatches.append((pickled, installed))
+    return sorted(set(mismatches))
+
+
+def _report_version_skew(caught) -> None:
+    """Silent for a patch difference, loud for a minor one — and every
+    OTHER warning raised while loading is passed through untouched.
+
+    The bundle is loaded under catch_warnings so that the version warnings
+    can be classified, which means everything raised during the load is
+    captured. Dropping the rest would have silenced unrelated warnings
+    along with the ones this is meant to judge — tidier output bought by
+    hiding things. Only the version warnings are this function's business.
+    """
+    for record in caught:
+        if type(record.message).__name__ != "InconsistentVersionWarning":
+            warnings.warn_explicit(
+                record.message, record.category, record.filename, record.lineno)
+    for pickled, installed in sklearn_minor_mismatches(caught):
+        logger.warning(
+            f"The pan-African detector was saved with scikit-learn {pickled} and "
+            f"is being read by {installed}. Across minor versions a pickled model "
+            "is not guaranteed to load faithfully, and it fails silently when it "
+            "does not. Install scikit-learn from the pinned range in "
+            "requirements.txt, or re-save the bundle and re-run its tests: "
+            "python scripts/build_pan_african_bundle.py --reexport"
+        )
+
+
 class SklearnLanguageDetector(LanguageDetector):
     """Character n-gram TF-IDF + a linear classifier, loaded from a joblib
     bundle.
@@ -519,13 +575,16 @@ class SklearnLanguageDetector(LanguageDetector):
             return
 
         try:
-            bundle = joblib.load(model_path)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                bundle = joblib.load(model_path)
             self._pipeline = bundle["pipeline"]
             self._labels = [str(label) for label in bundle["labels"]]
         except Exception as e:
             logger.warning(f"Could not load sklearn detector: {e}")
             self._pipeline = None
             return
+        _report_version_skew(caught)
 
         # A bundle whose labels are still encoded integers would "work" and
         # report languages called "0" and "7". Refuse it.

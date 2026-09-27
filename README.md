@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/RinsunaMahani/bao-ai/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RinsunaMahani/bao-ai/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.10%20%7C%203.12-3776AB?logo=python&logoColor=white">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.11%20%7C%203.14-3776AB?logo=python&logoColor=white">
   <img alt="Streamlit" src="https://img.shields.io/badge/UI-Streamlit-FF4B4B?logo=streamlit&logoColor=white">
   <img alt="TensorFlow Lite" src="https://img.shields.io/badge/On--device%20ML-LiteRT%20%2F%20TFLite-FF6F00?logo=tensorflow&logoColor=white">
   <img alt="scikit-learn" src="https://img.shields.io/badge/Retrieval-scikit--learn-F7931E?logo=scikitlearn&logoColor=white">
@@ -188,7 +188,7 @@ of the ~96 MB of model weight kept out of any deployment image.
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.11+ (3.10 cannot load the pickled language model faithfully — see `pyproject.toml`)
 - Docker Desktop (optional, for containerized deployment)
 - A `GEMINI_API_KEY` in a `.env` file for online generation (the app runs
   fully offline without one — see Architecture above)
@@ -276,8 +276,8 @@ The suite covers the security guardrails, language
 detector, knowledge retrieval (including the documented TF-IDF false
 positive limitation below), conversation memory, and the full orchestrator
 pipeline end to end, offline. CI (`.github/workflows/ci.yml`) runs both
-`ruff check .` and the full test suite, plus `evaluate.py`, on Python 3.10
-and 3.12 for every push and pull request.
+`ruff check .` and the full test suite, plus `evaluate.py`, on Python 3.11
+(the supported floor) and 3.14 for every push and pull request.
 
 ## Evaluation
 

@@ -360,25 +360,28 @@ def test_luganda_is_a_known_miss_and_stays_documented():
     )
 
 
-def test_the_bundle_loads_without_a_version_warning():
-    """A joblib bundle records the scikit-learn that pickled it, and
-    loading it under a different one warns on every estimator.
+def test_the_bundle_is_read_by_the_scikit_learn_series_that_saved_it():
+    """A joblib bundle records the scikit-learn that pickled it. Across
+    MINOR versions a pickled estimator is not guaranteed to load
+    faithfully, and when it does not, it fails silently rather than
+    raising.
 
-    Four warnings per load drowned the suite at 280 total, where a real one
-    would have gone unread. It is also not purely cosmetic: unpickling an
-    estimator across versions is not guaranteed faithful, and when it is
-    not, it fails silently rather than raising.
+    Patch differences are allowed on purpose. scikit-learn warns on any
+    difference, and the earlier version of this test failed on all of
+    them - which would have turned CI red every time a 1.9.x patch
+    shipped, since CI installs the newest one. The real risk is the one
+    CI's own install log showed: on Python 3.10, pip can only get 1.7.2.
 
-    If this fails after a scikit-learn upgrade, re-save the bundle and
-    confirm nothing moved:
+    If this fails, install scikit-learn from the pinned range in
+    requirements.txt, or re-save the bundle and re-run these tests:
 
         python scripts/build_pan_african_bundle.py --reexport
-        python -m pytest tests/test_pan_african.py
     """
     import warnings
 
     import joblib
-    from sklearn.exceptions import InconsistentVersionWarning
+
+    from bao.services.language_detector import sklearn_minor_mismatches
 
     path = Settings().pan_african_model_path
     if not Path(path).exists():
@@ -388,8 +391,31 @@ def test_the_bundle_loads_without_a_version_warning():
         warnings.simplefilter("always")
         joblib.load(path)
 
-    stale = [w for w in caught if issubclass(w.category, InconsistentVersionWarning)]
-    assert not stale, (
-        f"{len(stale)} estimator(s) were pickled by a different scikit-learn. "
-        "Run: python scripts/build_pan_african_bundle.py --reexport"
-    )
+    assert not sklearn_minor_mismatches(caught), sklearn_minor_mismatches(caught)
+
+
+def _version_warning(pickled, installed):
+    import warnings
+
+    from sklearn.exceptions import InconsistentVersionWarning
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        warnings.warn(InconsistentVersionWarning(
+            estimator_name="Pipeline", current_sklearn_version=installed,
+            original_sklearn_version=pickled))
+    return caught
+
+
+def test_a_patch_difference_is_not_treated_as_a_fault():
+    """Deterministic, whatever scikit-learn happens to be installed."""
+    from bao.services.language_detector import sklearn_minor_mismatches
+
+    assert sklearn_minor_mismatches(_version_warning("1.9.0", "1.9.1")) == []
+
+
+def test_a_minor_difference_is():
+    from bao.services.language_detector import sklearn_minor_mismatches
+
+    assert sklearn_minor_mismatches(_version_warning("1.9.0", "1.7.2")) == [("1.9.0", "1.7.2")]
+    assert sklearn_minor_mismatches(_version_warning("1.9.0", "2.0.0")) == [("1.9.0", "2.0.0")]
