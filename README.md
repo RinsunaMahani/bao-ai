@@ -340,6 +340,13 @@ production default rather than an optional extra: it resolves precisely
 the case the simpler approach cannot. Pinned by
 `tests/test_language_detector.py::test_disambiguates_the_closely_related_sotho_tswana_group`.
 
+A bare "Dumela", with nothing after it, is the same text in all three
+languages, so no detector can separate it. The sidebar's **Reply in**
+picker lets the visitor say which language they mean; it defaults to
+"Detect automatically". Each of the three languages has its own curated
+greeting, so the test checks the answer as well as the badge:
+`tests/test_streamlit_app.py::test_reply_in_settles_a_greeting_three_languages_share`.
+
 ### Retrieval precision and recall
 
 `python evaluate.py --rag-eval eval/rag_eval.csv` scores retrieval against
@@ -512,7 +519,8 @@ Stated here so they are read rather than discovered.
   correctly but at 43% confidence, just under the 44% that English reaches
   as Nigerian Pidgin. Admitting Luganda would mean relabelling English, so
   24 of 25 languages route correctly and this one does not. Reproduce with
-  `python scripts/probe_language_routing.py`.
+  `python scripts/probe_language_routing.py`. A Luganda speaker can still
+  get Luganda replies by choosing it under **Reply in** in the sidebar.
 - **Gemini free-tier quotas are small, and they are per model.** Measured
   on `gemini-3.6-flash`: 5 requests a minute and 20 a day, which is about
   one demo. This deployment uses `gemini-3.5-flash`, chosen by measuring

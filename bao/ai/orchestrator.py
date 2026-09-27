@@ -192,12 +192,11 @@ class Orchestrator:
         the user has stated a preference explicitly.
 
         It was introduced for sign input (a recognised sign is a gloss, not
-        a sentence in any spoken language) and outlived that feature. Kept
-        because it is the mechanism a "reply in ..." selector would use,
-        and because it is what makes the pan-African languages reachable
-        when the detector is unsure. Currently exercised by the tests and
-        by scripts/gates.py, not by either interface — remove it if that is
-        still true when the project is next tidied.
+        a sentence in any spoken language) and outlived that feature. It is
+        now what the web UI's "Reply in" picker passes, which is also what
+        makes a pan-African language reachable when the detector is unsure
+        of it. It outranks a language named in the message: the picker is a
+        standing choice the visitor can see, and the badge says it is on.
         """
         start = time.perf_counter()
         timings: dict[str, float] = {}

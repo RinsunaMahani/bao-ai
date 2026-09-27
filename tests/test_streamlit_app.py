@@ -70,7 +70,7 @@ def page(voice_controls):
 
 
 def _settings(at) -> dict:
-    keys = ("speech_enabled", "stt_language", "pan_african_enabled")
+    keys = ("speech_enabled", "stt_language", "pan_african_enabled", "reply_in")
     return {k: at.session_state[k] for k in keys if k in at.session_state}
 
 
@@ -93,10 +93,12 @@ def test_a_greeting_is_answered_in_its_own_language(page):
 def test_new_conversation_keeps_the_visitors_settings(page):
     """The regression this file exists for."""
     page.sidebar.selectbox(key="stt_language").set_value("isiZulu").run()
+    page.sidebar.selectbox(key="reply_in").set_value("Xitsonga").run()
     page.chat_input[0].set_value("Avuxeni").run()
     before = _settings(page)
     assert before["speech_enabled"] is False
     assert before["stt_language"] == "isiZulu"
+    assert before["reply_in"] == "Xitsonga"
 
     [b for b in page.sidebar.button if b.label == "New conversation"][0].click().run()
 
@@ -135,3 +137,83 @@ def test_the_page_survives_a_missing_logo(monkeypatch, voice_controls):
 
     assert not at.exception, [str(e.value) for e in at.exception]
     assert [m for m in at.chat_message if m.name == "assistant"]
+
+
+# --- "Reply in" --------------------------------------------------------------
+
+
+def test_reply_in_offers_only_what_the_app_can_currently_detect():
+    from bao.core.config import LABELS, PAN_AFRICAN_LABELS
+    from bao.ui.streamlit_app import REPLY_AUTO, reply_language_options
+
+    assert reply_language_options(False) == [REPLY_AUTO, *LABELS]
+    assert reply_language_options(True) == [REPLY_AUTO, *LABELS, *PAN_AFRICAN_LABELS]
+
+
+def test_automatic_means_no_override():
+    from bao.ui.streamlit_app import REPLY_AUTO, reply_override
+
+    assert reply_override(REPLY_AUTO) is None
+    assert reply_override(None) is None       # a session from before the picker
+    assert reply_override("Sesotho") == "Sesotho"
+
+
+def test_the_badge_does_not_present_a_choice_as_a_detection():
+    """"Language: Sesotho" would read as the detector's finding - on a
+    greeting ("Dumela") the detector cannot actually tell apart.
+    """
+    from bao.ai.orchestrator import PipelineResult
+    from bao.ui.streamlit_app import _format_detection_badge
+
+    result = PipelineResult(
+        text="Lumela! Nka o thusa jwang?", detected_language="Sesotho",
+        confidence=1.0, detection_backend="override", source="knowledge_base",
+        latency_ms=1.0, reply_language="Sesotho", language_was_overridden=True,
+    )
+    badge = _format_detection_badge(result)
+    assert badge.startswith("Replying in Sesotho (chosen in the sidebar)")
+    assert "Language:" not in badge and "%" not in badge
+
+
+@pytest.mark.parametrize(("choice", "greeting"), [
+    ("Sepedi", "Thobela!"),
+    ("Sesotho", "Lumela!"),
+    ("Setswana", "Dumela!"),
+])
+def test_reply_in_settles_a_greeting_three_languages_share(page, choice, greeting):
+    """The case the picker exists for. "Dumela" is a greeting in Sepedi,
+    Sesotho and Setswana, so no detector can know which the visitor
+    speaks; the picker lets them say. Each language has its own curated
+    row, so the answer proves the choice reached retrieval, not just the
+    badge.
+    """
+    page.sidebar.selectbox(key="reply_in").set_value(choice).run()
+    page.chat_input[0].set_value("Dumela").run()
+
+    assert not page.exception, [str(e.value) for e in page.exception]
+    reply = [m for m in page.chat_message if m.name == "assistant"][-1]
+    assert reply.markdown[0].value.startswith(greeting)
+    assert f"Replying in {choice} (chosen in the sidebar)" in reply.caption[0].value
+
+
+def test_a_choice_that_is_no_longer_offered_falls_back_to_automatic(page):
+    """Turning the 14 extra languages off removes them from the picker.
+    A visitor who had chosen one must land on automatic rather than keep
+    a language the app has just stopped offering. Streamlit 1.59.2 does
+    this by itself, so there is no code of ours to test here - this pins
+    the behaviour, so a Streamlit release that changes it fails CI instead
+    of the demo.
+    """
+    toggles = [c for c in page.sidebar.checkbox if c.key == "pan_african_enabled"]
+    if not toggles:
+        pytest.skip("pan-African bundle not present")
+    toggles[0].check().run()
+    page.sidebar.selectbox(key="reply_in").set_value("Swahili").run()
+    assert page.session_state["reply_in"] == "Swahili"
+
+    page.sidebar.checkbox(key="pan_african_enabled").uncheck().run()
+
+    assert not page.exception, [str(e.value) for e in page.exception]
+    from bao.ui.streamlit_app import REPLY_AUTO
+    assert page.session_state["reply_in"] == REPLY_AUTO
+    assert "Swahili" not in page.sidebar.selectbox(key="reply_in").options

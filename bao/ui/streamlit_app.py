@@ -99,6 +99,22 @@ def init_system():
     return settings, orchestrator, orchestrator.document_retriever
 
 
+REPLY_AUTO = "Detect automatically"
+
+
+def reply_language_options(pan_african_live: bool) -> list[str]:
+    """What the "Reply in" picker offers: automatic, the eleven South
+    African languages, and the fourteen pan-African ones only while that
+    detector is on.
+    """
+    return [REPLY_AUTO, *LABELS, *(PAN_AFRICAN_LABELS if pan_african_live else [])]
+
+
+def reply_override(choice: str | None) -> str | None:
+    """The language_override for Orchestrator.handle, or None to detect."""
+    return None if not choice or choice == REPLY_AUTO else choice
+
+
 # Session keys that describe the conversation so far, as opposed to the
 # visitor's settings (voice on/off, input language, pan-African toggle),
 # which a new conversation should leave alone.
@@ -208,9 +224,10 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
                 help=(
                     "Amharic, French, Hausa, Igbo, Lingala, Luganda, Oromo, "
                     "Nigerian Pidgin, Kirundi, Shona, Somali, Swahili, "
-                    "Tigrinya, Yoruba. Consulted only when the South African "
-                    "classifier is unsure, so the 11 are unaffected. Works on "
-                    "phrases rather than single words."
+                    "Tigrinya, Yoruba. Consulted on every message, but it "
+                    "only takes over when it is confident the text is not a "
+                    "South African language, so the 11 are unaffected. Works "
+                    "on phrases rather than single words."
                 ),
             )
             detector.enabled = enabled
@@ -231,6 +248,29 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
         st.caption(
             "isiZulu, Sepedi, Setswana, isiXhosa, Afrikaans, English, "
             "isiNdebele, siSwati, Tshivenda, Xitsonga, Sesotho"
+        )
+
+        # Lets the visitor overrule detection. It covers the cases detection
+        # cannot get right on its own: "Dumela" is the greeting in Sepedi,
+        # Sesotho AND Setswana, and Luganda is identified correctly but at
+        # too low a confidence to act on. It also lets any supported
+        # language be shown on cue rather than hoped for.
+        #
+        # The options follow what the app can currently detect, so turning
+        # the 14 extra languages off also removes them here. A choice that
+        # is no longer offered falls back to the first option, automatic -
+        # Streamlit does that itself (measured on 1.59.2), and
+        # test_a_choice_that_is_no_longer_offered_falls_back_to_automatic
+        # holds every version CI installs to it.
+        st.selectbox(
+            "Reply in",
+            reply_language_options(pan_african_live),
+            key="reply_in",
+            help=(
+                "Bao detects your language and replies in it. Choose one "
+                "here to always reply in that language instead - useful for "
+                "a greeting shared by several languages, such as 'Dumela'."
+            ),
         )
 
         st.markdown("---")
@@ -385,6 +425,10 @@ def _format_detection_badge(result) -> str:
             f"Language: {result.detected_language} "
             f"(ML model via Keras fallback, {result.confidence * 100:.0f}%)"
         )
+    elif result.detection_backend == "override":
+        # Chosen, not detected - saying "Language: isiZulu" here would
+        # present the visitor's own choice as the detector's finding.
+        detection_part = f"Replying in {result.detected_language} (chosen in the sidebar)"
     else:
         detection_part = f"Language: {result.detected_language}"
     # When the reply is in a different language from the one detected, say
@@ -459,7 +503,10 @@ def render_legacy_voice_input(settings: Settings, orchestrator: Orchestrator) ->
             if transcription:
                 st.write(f"Transcribed: **{transcription}**")
                 if st.button("Send voice transcription"):
-                    _handle_turn(settings, orchestrator, transcription, display_prefix="[Voice] ")
+                    _handle_turn(
+                        settings, orchestrator, transcription, display_prefix="[Voice] ",
+                        language_override=reply_override(st.session_state.get("reply_in")),
+                    )
 
 
 def _handle_turn(
@@ -593,7 +640,10 @@ def main() -> None:
     submitted = render_chat_input(settings)
     if submitted:
         user_input, prefix = submitted
-        _handle_turn(settings, orchestrator, user_input, display_prefix=prefix)
+        _handle_turn(
+            settings, orchestrator, user_input, display_prefix=prefix,
+            language_override=reply_override(st.session_state.get("reply_in")),
+        )
 
 
 if __name__ == "__main__":
