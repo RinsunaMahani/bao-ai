@@ -58,3 +58,31 @@ def test_the_shipped_config_and_the_code_default_agree_on_english():
     from bao.core.config import DEFAULT_MMS_CODES, Settings
 
     assert Settings().mms_codes["English"] == DEFAULT_MMS_CODES["English"]
+
+
+def test_python_310_can_read_config_toml():
+    """tomllib only exists from Python 3.11, and pyproject declares 3.10
+    supported. Nothing installed tomli, so on 3.10 config.toml was silently
+    ignored - the app ran on code defaults with a different model and with
+    whole features switched off. CI could not see it because pytest itself
+    depends on tomli on 3.10.
+    """
+    import re
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    requirements = (repo / "requirements.txt").read_text(encoding="utf-8")
+    pyproject = (repo / "pyproject.toml").read_text(encoding="utf-8")
+    marker = re.compile(r"""tomli[^\n]*python_version\s*<\s*['"]3\.11['"]""")
+    assert marker.search(requirements), "requirements.txt must install tomli on 3.10"
+    assert marker.search(pyproject), "pyproject.toml must install tomli on 3.10"
+
+
+def test_the_code_default_model_is_the_one_config_toml_chose():
+    """If config.toml fails to load, the app should still use the model
+    that was chosen for it - not silently fall onto a different model with
+    a far smaller quota.
+    """
+    from bao.core.config import GEMINI_MODEL_DEFAULT, Settings
+
+    assert Settings().gemini_model == GEMINI_MODEL_DEFAULT

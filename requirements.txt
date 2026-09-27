@@ -3,6 +3,13 @@
 streamlit>=1.40.0
 google-genai>=0.1.1
 python-dotenv>=1.0.1
+# config.toml is parsed with tomllib, which only exists from Python 3.11.
+# On 3.10 - which pyproject declares supported and CI tests - nothing else
+# installed tomli, so config.toml was SILENTLY ignored: one error line, then
+# the app ran on code defaults with a different Gemini model and with the
+# pan-African languages and the South African voices switched off. CI never
+# saw it because pytest happens to depend on tomli on 3.10.
+tomli>=1.1.0; python_version < "3.11"
 # The pan-African detector bundle is a pickled, fitted Pipeline, so the
 # scikit-learn that loads it should be the one that saved it. Loading
 # across versions warns on every estimator and is not guaranteed faithful.

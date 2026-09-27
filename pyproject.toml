@@ -20,6 +20,9 @@ dependencies = [
     "streamlit>=1.40.0",
     "google-genai>=0.1.1",
     "python-dotenv>=1.0.1",
+    # tomllib is 3.11+. Without this, config.toml is silently ignored on
+    # 3.10 - see requirements.txt.
+    "tomli>=1.1.0; python_version < '3.11'",
     # 1.6+ so the pan-African detector bundle loads without an
     # InconsistentVersionWarning (requirements.txt carries the same floor).
     "scikit-learn>=1.6.0",

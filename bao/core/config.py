@@ -28,7 +28,12 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ASSISTANT_NAME = "Bao"
 ASSISTANT_LOGO_PATH = os.path.join(BASE_DIR, "docs", "assets", "logo.jpg")
-GEMINI_MODEL_DEFAULT = "gemini-3.6-flash"
+# Matches config.toml's choice, so the app behaves the same if config.toml
+# fails to load. It was gemini-3.6-flash — the model whose free tier allows
+# 20 requests a DAY — so any failure to read the config quietly moved the
+# app onto its most restrictive quota. See config.toml for how 3.5-flash was
+# chosen.
+GEMINI_MODEL_DEFAULT = "gemini-3.5-flash"
 
 LABELS = [
     "English", "isiZulu", "isiXhosa", "Afrikaans", "Sesotho",
