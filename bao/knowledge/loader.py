@@ -45,6 +45,11 @@ class Chunk:
     id: str
     title: str
     content: str
+    # Which upload this came from. Carried separately from `id`, which
+    # embeds it as a prefix, so re-indexing a file can replace exactly its
+    # own chunks — matching on the id prefix would also catch a document
+    # whose name merely starts with the same characters.
+    source: str = ""
 
 
 def load_knowledge_csv(path: str):
@@ -118,7 +123,8 @@ def chunk_text(text: str, source_name: str, chunk_size: int = 300, chunk_overlap
         return []
 
     if len(words) <= chunk_size:
-        return [Chunk(id=f"{source_name}_chunk_1", title=f"{source_name} (Chunk 1)", content=text.strip())]
+        return [Chunk(id=f"{source_name}_chunk_1", title=f"{source_name} (Chunk 1)",
+                      content=text.strip(), source=source_name)]
 
     chunks: list[Chunk] = []
     start = 0
@@ -129,6 +135,7 @@ def chunk_text(text: str, source_name: str, chunk_size: int = 300, chunk_overlap
             id=f"{source_name}_chunk_{idx}",
             title=f"{source_name} (Chunk {idx})",
             content=" ".join(words[start:end]),
+            source=source_name,
         ))
         idx += 1
         start += (chunk_size - chunk_overlap)
@@ -138,28 +145,43 @@ def chunk_text(text: str, source_name: str, chunk_size: int = 300, chunk_overlap
 def extract_text_from_bytes(file_bytes: bytes, filename: str) -> str:
     """Extracts plain text from an uploaded file's raw bytes, based on
     extension. Supports .txt, .md, .csv, and .pdf (if pypdf is installed).
+
+    Returns "" for anything it cannot read, and NEVER raises. This is the
+    boundary where a file chosen by someone else enters the app, so "not
+    readable" has to be an ordinary outcome rather than an exception: a
+    corrupt or empty PDF previously raised out of here, and the Streamlit
+    upload handler has no try/except, so choosing the wrong file replaced
+    the page with a traceback. The caller already handles an empty result
+    by naming the file it could not read.
     """
     ext = filename.rsplit(".", 1)[-1].lower()
 
-    if ext in {"txt", "md"}:
-        return file_bytes.decode("utf-8", errors="ignore")
+    try:
+        if ext in {"txt", "md"}:
+            return file_bytes.decode("utf-8", errors="ignore")
 
-    if ext == "csv":
-        decoded = file_bytes.decode("utf-8", errors="ignore")
-        rows = [", ".join(row) for row in csv.reader(io.StringIO(decoded)) if row]
-        return "\n".join(rows)
+        if ext == "csv":
+            decoded = file_bytes.decode("utf-8", errors="ignore")
+            rows = [", ".join(row) for row in csv.reader(io.StringIO(decoded)) if row]
+            return "\n".join(rows)
 
-    if ext == "pdf":
-        if not _HAS_PYPDF:
-            logger.warning("pypdf not installed; cannot extract text from PDF uploads.")
-            return ""
-        reader = PdfReader(io.BytesIO(file_bytes))
-        text = ""
-        for page in reader.pages:
-            extracted = page.extract_text()
-            if extracted:
-                text += extracted + "\n"
-        return text
+        if ext == "pdf":
+            if not _HAS_PYPDF:
+                logger.warning("pypdf not installed; cannot extract text from PDF uploads.")
+                return ""
+            reader = PdfReader(io.BytesIO(file_bytes))
+            text = ""
+            for page in reader.pages:
+                extracted = page.extract_text()
+                if extracted:
+                    text += extracted + "\n"
+            return text
+    except Exception as e:
+        # The filename is logged because the user chose it and needs to
+        # know which upload failed; the CONTENT never is, for the same
+        # reason retrieval logs query lengths rather than query text.
+        logger.warning(f"Could not read {filename!r}: {type(e).__name__}: {e}")
+        return ""
 
     logger.warning(f"Unsupported file format for ingestion: .{ext}")
     return ""

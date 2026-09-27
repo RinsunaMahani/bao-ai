@@ -331,12 +331,15 @@ class KnowledgeRetriever:
         a known language name, so "how many official languages does South
         Africa have" is unaffected.
         """
-        if cls._TARGET_LANGUAGE_RE is None:
-            from bao.core.config import LABELS
+        from bao.services.language_detector import named_target_language
 
-            names = "|".join(re.escape(name.lower()) for name in LABELS)
-            cls._TARGET_LANGUAGE_RE = re.compile(rf"\bin\s+({names})\b")
-        return bool(cls._TARGET_LANGUAGE_RE.search(query.lower()))
+        # Shared with the orchestrator, which applies the same rule to
+        # decide what language to ANSWER in. Two copies of "does this name
+        # a language" could disagree about one sentence, and then the
+        # knowledge base and the reply language would be reading the same
+        # question differently. It also widens this to the pan-African
+        # names, which the local copy never knew about.
+        return named_target_language(query) is not None
 
     def lookup(self, query: str, prefer_language: str | None = None) -> KnowledgeFact | None:
         """Finds a curated answer, preferring one written in the language
@@ -417,15 +420,33 @@ class DocumentRetriever:
     and nothing here writes them to disk. `clear()` genuinely drops them.
     """
 
-    def __init__(self, chunk_size: int = 300, chunk_overlap: int = 50):
+    # A ceiling on what one session can hold. Nothing bounded this: every
+    # upload appended, so a large PDF re-indexed a few times grew the store
+    # and the per-add refit cost without limit. 400 chunks is roughly 120
+    # pages of text, far more than a session needs, and reaching it is
+    # reported rather than silently truncated.
+    MAX_CHUNKS = 400
+
+    def __init__(self, chunk_size: int = 300, chunk_overlap: int = 50,
+                 max_chunks: int = MAX_CHUNKS):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.max_chunks = max_chunks
         self._chunks: list = []
         self._store: VectorStore | None = None
 
     def add_document(self, doc_id: str, content: str) -> int:
-        """Chunks and indexes one document. Returns the number of chunks
-        added (0 if the document had no extractable text).
+        """Chunks and indexes one document, REPLACING any previous version
+        of the same one. Returns the number of chunks added (0 if the
+        document had no extractable text).
+
+        Replacing rather than appending because indexing the same file
+        twice is a click away — the uploader keeps its files across reruns,
+        so pressing the button again re-indexed everything. The visible
+        cost was in the prompt: the same passage was handed to Gemini
+        twice, paying for the tokens and inviting the model to treat a
+        repetition as emphasis. It also distorts TF-IDF, which weights
+        terms by how many chunks contain them.
         """
         if not has_sklearn_support() or not content or not content.strip():
             return 0
@@ -439,9 +460,50 @@ class DocumentRetriever:
         if not new_chunks:
             return 0
 
-        self._chunks.extend(new_chunks)
+        kept = [c for c in self._chunks if getattr(c, "source", "") != doc_id]
+        replaced = len(self._chunks) - len(kept)
+        # Where this document's chunks were, so a re-index puts the new
+        # ones back in the same place. Appending instead would reorder the
+        # "Documents Bao can read" list while the user is looking at it.
+        # Every chunk before the first match is kept, so the index into
+        # _chunks is also the index into `kept`.
+        position = next(
+            (i for i, c in enumerate(self._chunks)
+             if getattr(c, "source", "") == doc_id),
+            len(kept),
+        )
+        if replaced:
+            logger.info(f"Re-indexed {doc_id}: replaced {replaced} existing chunk(s).")
+
+        room = self.max_chunks - len(kept)
+        if room <= 0:
+            logger.warning(
+                f"Document store is full ({self.max_chunks} chunks); "
+                f"{doc_id} was not indexed. Clear the uploads to add more."
+            )
+            return 0
+        if len(new_chunks) > room:
+            logger.warning(
+                f"{doc_id} was truncated to {room} of {len(new_chunks)} chunks "
+                f"— the store holds at most {self.max_chunks}."
+            )
+            new_chunks = new_chunks[:room]
+
+        self._chunks = kept[:position] + new_chunks + kept[position:]
         self._rebuild()
         return len(new_chunks)
+
+    @property
+    def sources(self) -> list[str]:
+        """Which documents are currently indexed, for the interface to
+        show. Without this a user cannot tell what the assistant can see.
+        """
+        seen: list[str] = []
+        for chunk in self._chunks:
+            source = getattr(chunk, "source", "")
+            if source and source not in seen:
+                seen.append(source)
+        return seen
 
     def _rebuild(self) -> None:
         """Re-fits over ALL chunks, not just the new ones — TF-IDF weights

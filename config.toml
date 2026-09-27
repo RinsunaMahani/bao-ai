@@ -1,18 +1,59 @@
 # Bao AI Assistant Configuration
 
 [model]
-gemini_model = "gemini-3.6-flash"
+# Free-tier quotas are PER MODEL — the quota id Google returns is
+# GenerateRequestsPerDayPerProjectPerModel-FreeTier — so switching models
+# gets a fresh daily budget rather than sharing one. Useful when one is
+# exhausted mid-session.
+#
+# Per-minute limits are a rolling window and free up continuously. The
+# per-DAY limit is the one that ends a session, and it resets on Google's
+# schedule (midnight US Pacific), not at local midnight.
+#
+# Availability measured on 2026-09-19, 10 calls each:
+#
+#   gemini-3.5-flash       6 ok, 0x 503   <- chosen
+#   gemini-3.7-flash       2 ok, 4x 503
+#   gemini-3.8-flash       1 ok, 5x 503
+#   gemini-3.6-flash       daily quota exhausted (20 requests/day)
+#
+# The newest models are the most congested, which is the opposite of the
+# intuition that newer is better to point at. 3.5-flash also answers the
+# multilingual task well: "explain calculus in xitsonga" came back in
+# real Xitsonga, and gravity in Afrikaans in real Afrikaans, both at 99%+
+# on the reply. gemini-3.5-flash-lite is the lighter fallback if this one
+# runs out — it is more available but weaker at cross-lingual answers.
+gemini_model = "gemini-3.5-flash"
 # Pan-African classifier (14 languages, disjoint from the 11 SA ones).
 # OFF by default: turning it on changes the detection path for EVERY
 # message, not just the new languages. Enable it, run
 #   python scripts/gates.py
 # and check the 11 SA languages still detect correctly before demoing.
-enable_pan_african = false
+enable_pan_african = true
 # Detection below this confidence is shown to the user but NOT used to
 # choose the reply language — the app answers in English instead.
 # A weak guess otherwise produces an answer in the wrong language, not
 # merely a wrong badge. Measured live: correct at 64%+, wrong at 35-42%.
 min_detection_confidence = 0.5
+# Gemini answers 503 UNAVAILABLE ("this model is currently experiencing
+# high demand") under load and 429 when rate-limited. Both mean "not now",
+# not "not ever" — the same request usually succeeds straight after. Retry
+# so one spike does not cost the user their turn. Backoff is a fraction of
+# a second, so 3 attempts add about a second in the worst case. 1 = off.
+generation_max_attempts = 3
+# How much the model reasons before it starts answering. Gemini 3.x models
+# emit NOTHING until thinking finishes, so this is how long someone watches
+# a spinner — streaming cannot shorten it. Measured on gemini-3.5-flash
+# with "explain calculus in xitsonga":
+#
+#   MINIMAL    6.6s to the first word, 12.8s total
+#   default   11.9s to the first word, 13.0s total
+#   LOW       15.0s to the first word, 19.2s total
+#
+# All three answered in correct Xitsonga at 100%, so the extra reasoning
+# bought no accuracy on this kind of question. Raise to LOW/MEDIUM/HIGH for
+# genuinely hard ones, or "default" to let the model choose.
+thinking_level = "MINIMAL"
 
 [retrieval]
 default_similarity_threshold = 0.25
@@ -49,23 +90,64 @@ stt_codes = { "Afrikaans" = "af-ZA", "English" = "en-ZA", "isiNdebele" = "nr-ZA"
 # "mms"  = always offline MMS. "edge" = edge only (silent for the other 8).
 backend = "auto"
 # Voice coverage fallbacks, both OFF by default.
-#   fallback_related_voice: speak isiXhosa/siSwati/isiNdebele with the
-#     isiZulu voice. All Nguni, so the model has seen the orthography
-#     Also enables Sesotho/Setswana with the Sepedi voice, but ONLY
-#     when a Sepedi checkpoint is registered under [speech.local_voices]
-#     below — no Sotho-Tswana voice ships on Hugging Face.
-#     including the click letters — but it is still an approximation.
-#     There is deliberately NO equivalent for Sesotho/Setswana/Sepedi
-#     (no voice exists anywhere in that family) or Tshivenda (Venda is
-#     not close to Tsonga and uses diacritics Tsonga lacks).
+#   fallback_related_voice: speak a language with a closely-related
+#     language's voice.
+#       - isiXhosa / siSwati / isiNdebele -> isiZulu. All Nguni, so the
+#         model has seen the orthography including the click letters —
+#         but it is still an approximation.
+#       - Sesotho / Setswana -> Sepedi. Available ONLY while a Sepedi
+#         checkpoint is registered under [speech.local_voices] below,
+#         because no Sotho-Tswana voice ships on Hugging Face. Without
+#         one, all three stay text-only.
+#       - There is deliberately NO route for Tshivenda: Venda is its own
+#         branch of Bantu, Tsonga is Tswa-Ronga, and Venda orthography
+#         uses dental diacritics (ṱ ḓ ṋ ḽ) that Tsonga lacks entirely.
 #   fallback_english_voice: speak the reply in English instead.
 # Either way the interface states which voice was used. A substitution
 # the listener is told about is a fallback; one they are not told about
 # is a misrepresentation.
 fallback_related_voice = false
 fallback_english_voice = false
+# Reads the WHOLE reply by default. 0 = no limit.
+#
+# This was capped at 400 characters to keep synthesis quick, and that was
+# the wrong trade for this app. The voice is not a flourish on top of text
+# someone has already read — for a user who cannot easily read the screen
+# it IS the answer, and half an answer is not an answer. An emergency
+# number cut off before the number is worse than no audio at all.
+#
+# The cost is real and worth stating: MMS runs a VITS forward pass per
+# sentence on CPU, so a long reply takes roughly 60 seconds to synthesize
+# and produces two and a half minutes of audio. Synthesis runs AFTER the
+# text is on screen, so it delays nothing anyone is reading.
+#
+# Set a character count here to cap it again — the cut lands on a sentence
+# boundary and the interface says it happened.
+max_speech_characters = 0
 speaking_rate = 0.85   # Pacing control (< 1.0 is SLOWER; applies to both backends)
 noise_scale = 0.35      # Prosody variance, MMS only (< 0.667 removes robotic pitch jitter)
+
+# The multilingual South African VITS model (all 11 languages), which
+# closes the gap edge-tts and MMS leave: seven languages with no voice.
+# OFF by default, and the reason is licensing, not quality.
+#
+#   - cc-by-nc-4.0 = NON-COMMERCIAL. This project is MIT. The model is
+#     downloaded at runtime and never bundled, but switching this on makes
+#     what you deploy non-commercial. Fine for a university project.
+#   - Its Hugging Face repo is GATED with automatic approval: open
+#     https://huggingface.co/guymandude/South-African-TTS-11-Vits once,
+#     accept the terms, and set HF_TOKEN in .env. Without that every fetch
+#     returns 403 and the seven languages stay text-only.
+#   - Its model card is an empty template. There is no published
+#     evaluation, so listen to it before you demo it.
+#
+# Needs `pip install coqui-tts`, and downloads ~150 MB on first use.
+enable_coqui_sa = true
+# Which of the model's 130 speakers to use. They are anonymous
+# (speaker_0 .. speaker_129) and carry no language or gender, so there is
+# no way to derive a good one — pick by ear. Empty = first in sorted
+# order, which is deterministic rather than chosen.
+coqui_speaker = ""
 
 [speech.local_voices]
 # VITS checkpoints this project trained itself, by language. Point each
@@ -76,6 +158,13 @@ noise_scale = 0.35      # Prosody variance, MMS only (< 0.667 removes robotic pi
 # voice, and it unlocks the Sesotho/Setswana Tier 2 routes, which are
 # unavailable otherwise because the whole Sotho-Tswana family 404s on
 # Hugging Face.
+#
+# A checkpoint is a VITS model, so it runs on the same torch/transformers
+# stack as MMS — without requirements-speech.txt installed, a registered
+# language honestly reports as text-only rather than promising audio that
+# cannot be produced. A registered checkpoint also OUTRANKS a generic
+# voice for the same language: train an isiZulu model and it is used in
+# place of the edge-tts one.
 # Sepedi = "models/voices/sepedi_vits"
 # isiZulu = "models/voices/isizulu_vits"
 # Xitsonga = "models/voices/xitsonga_vits"

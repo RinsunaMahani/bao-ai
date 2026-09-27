@@ -5,7 +5,7 @@ from bao.ai.orchestrator import Orchestrator
 from bao.core.config import Settings
 from bao.core.security import SecurityGuardrails
 from bao.knowledge.retriever import DocumentRetriever, KnowledgeRetriever
-from bao.services.language_detector import HeuristicLanguageDetector
+from bao.services.language_detector import DetectionResult, HeuristicLanguageDetector
 
 
 @pytest.fixture
@@ -174,8 +174,16 @@ def test_handle_does_not_synthesize_speech_unless_asked(orchestrator, monkeypatc
 
 
 def test_speak_attaches_audio_to_a_finished_result(orchestrator, monkeypatch):
+    import bao.services.speech as speech
     from bao.services.speech import SpeechAudio
 
+    # speak() consults the voice tiers before it synthesizes anything, and
+    # with no speech libraries installed English has no voice, so the fake
+    # synthesis below was never reached. This passed wherever edge-tts or
+    # MMS happened to be installed and failed where they were not - CI
+    # among them. The test is about attaching audio, not about which
+    # packages are present, so it says English is speakable.
+    monkeypatch.setattr(speech, "_HAS_EDGE_BACKEND", True)
     monkeypatch.setattr(
         "bao.ai.orchestrator.synthesize_speech",
         lambda *a, **k: SpeechAudio(data=b"RIFFfake", mime="audio/mpeg"),
@@ -442,3 +450,275 @@ def test_retrieval_uses_the_reply_language_not_the_raw_detection(orchestrator):
     assert result.reply_language == "English"
     # The English-preferring lookup must not return the siSwati greeting.
     assert "Nginganisita" not in result.text
+
+
+# --- a question that names its own language -----------------------------
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("explain calculus in xitsonga", "Xitsonga"),
+    ("explain gravity in Afrikaans", "Afrikaans"),
+    ("explain photosynthesis in isiZulu", "isiZulu"),
+    ("reply in Swahili please", "Swahili"),
+    ("explain this in Nigerian Pidgin", "Nigerian Pidgin"),
+])
+def test_a_named_language_is_recognised(query, expected):
+    """"What language is this written in" and "what language does it ask
+    for" are different questions, and the pipeline used to answer only the
+    first.
+    """
+    from bao.services.language_detector import named_target_language
+
+    assert named_target_language(query) == expected
+
+
+@pytest.mark.parametrize("query", [
+    "how many official languages does South Africa have",
+    "tell me about life in south africa",
+    "what languages are spoken here",
+])
+def test_ordinary_sentences_are_not_misread_as_requests(query):
+    """Deliberately narrow. It needs the preposition immediately before a
+    known language name, so prose that merely mentions languages, or a
+    place whose name contains one, is untouched.
+    """
+    from bao.services.language_detector import named_target_language
+
+    assert named_target_language(query) is None
+
+
+def test_the_named_language_beats_the_detected_one():
+    """The regression this fixes, without calling the API.
+
+    "explain calculus in Xitsonga" is WRITTEN in English, so detection
+    correctly returns English and the system instruction then reads
+    "Primary response language: English" - which the model obeys over the
+    request inside the sentence. Measured on gemini-3.5-flash-lite:
+    "explain gravity in Afrikaans" came back in English on both attempts.
+    Detection was not wrong; the pipeline was answering a different
+    question from the one asked.
+    """
+    from bao.ai.memory import ConversationMemory
+    from bao.ai.orchestrator import Orchestrator
+    from bao.core.security import SecurityGuardrails
+
+    captured = {}
+
+    class _Client:
+        def is_available(self):
+            return True
+
+        def generate(self, prompt, system_instruction=None, temperature=0.3):
+            captured["instruction"] = system_instruction
+            return "answer"
+
+    class _Detector:
+        def detect(self, text):
+            return DetectionResult(language="English", confidence=0.99, backend="stub")
+
+    orch = Orchestrator(
+        security=SecurityGuardrails(),
+        language_detector=_Detector(),
+        knowledge_retriever=None,
+        gemini_client=_Client(),
+        memory=ConversationMemory(),
+    )
+    result = orch.handle("explain calculus in Xitsonga")
+
+    assert result.detected_language == "English", "detection itself is unchanged"
+    assert result.reply_language == "Xitsonga", "the answer follows what was asked for"
+    assert "Primary response language: Xitsonga" in captured["instruction"]
+
+
+def test_an_explicit_override_still_wins_over_a_named_language():
+    """A caller pinning the language is a stronger statement than a phrase
+    inside the text, so the override must not be quietly overruled.
+    """
+    from bao.ai.memory import ConversationMemory
+    from bao.ai.orchestrator import Orchestrator
+    from bao.core.security import SecurityGuardrails
+
+    class _Client:
+        def is_available(self):
+            return True
+
+        def generate(self, prompt, system_instruction=None, temperature=0.3):
+            return "answer"
+
+    class _Detector:
+        def detect(self, text):
+            return DetectionResult(language="English", confidence=0.99, backend="stub")
+
+    orch = Orchestrator(
+        security=SecurityGuardrails(),
+        language_detector=_Detector(),
+        knowledge_retriever=None,
+        gemini_client=_Client(),
+        memory=ConversationMemory(),
+    )
+    result = orch.handle("explain calculus in Xitsonga", language_override="Sesotho")
+    assert result.reply_language == "Sesotho"
+
+
+def test_a_quoted_language_does_not_steal_the_voice():
+    """Observed live: "ni kombela u hlaya national anthem ya shona" was
+    answered in Xitsonga with the Shona anthem quoted inside it, and read
+    aloud by a SHONA voice.
+
+    Over the whole reply the detector returned Shona at 85%; over the
+    opening it returns Xitsonga at 100%. This assistant quotes other
+    languages constantly — lyrics, a passage being translated, a term
+    given in both — so the whole reply is the wrong sample. The opening is
+    where it speaks in its own voice, before it quotes anything.
+    """
+    from bao.ai.memory import ConversationMemory
+    from bao.ai.orchestrator import Orchestrator
+    from bao.core.security import SecurityGuardrails
+
+    class _Detector:
+        """Stands in for the real one: Xitsonga on the framing, Shona once
+        the quoted verses dominate.
+        """
+
+        def detect(self, text):
+            if "Yakazvarwa nomoto" in text and len(text) > 350:
+                return DetectionResult(language="Shona", confidence=0.85, backend="stub")
+            return DetectionResult(language="Xitsonga", confidence=1.0, backend="stub")
+
+    orch = Orchestrator(
+        security=SecurityGuardrails(),
+        language_detector=_Detector(),
+        knowledge_retriever=None,
+        gemini_client=None,
+        memory=ConversationMemory(),
+    )
+    reply = ("Inkomu! Hi leyi risimu ra tiko ra le Zimbabwe, leri tiviwaka hi ririmi "
+             "ra Xishona. Hi leswi swikiri swa rona: " + "Yakazvarwa nomoto wechimurenga " * 12)
+    assert orch._speech_language(reply, fallback="Xitsonga") == "Xitsonga"
+
+
+def test_a_requested_language_pins_the_voice():
+    """When the question named the language, a detector reading of the
+    reply must not overrule it — the user said it, we only inferred the
+    rest.
+    """
+    from bao.ai.memory import ConversationMemory
+    from bao.ai.orchestrator import Orchestrator
+    from bao.core.security import SecurityGuardrails
+
+    class _Client:
+        def is_available(self):
+            return True
+
+        def generate(self, prompt, system_instruction=None, temperature=0.3):
+            return "Avuxeni! Calculus i rhavi ra tinhlayo."
+
+    class _Detector:
+        def detect(self, text):
+            return DetectionResult(language="English", confidence=0.99, backend="stub")
+
+    orch = Orchestrator(
+        security=SecurityGuardrails(),
+        language_detector=_Detector(),
+        knowledge_retriever=None,
+        gemini_client=_Client(),
+        memory=ConversationMemory(),
+    )
+    result = orch.handle("explain calculus in Xitsonga")
+    assert result.language_was_requested is True
+    assert result.reply_language == "Xitsonga"
+
+
+@pytest.mark.parametrize("query", [
+    "I am interested in French cuisine",
+    "I have a degree in English literature",
+    "she is fluent in isiZulu and English",
+    "recipes popular in Somali culture",
+    "is there a bursary for studies in Afrikaans literature",
+])
+def test_a_language_used_as_an_adjective_is_not_a_request(query):
+    """Many language names double as adjectives, and every one of these
+    put a name straight after "in" — so all five were read as requests to
+    switch the reply language. "I am interested in French cuisine" would
+    have been answered in French.
+
+    What follows the name is the difference: a mention is followed by the
+    noun it describes, a request by nothing or by a function word.
+    """
+    from bao.services.language_detector import named_target_language
+
+    assert named_target_language(query) is None
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("explain calculus in xitsonga for a grade 10 learner", "Xitsonga"),
+    ("explain in isiZulu how photosynthesis works", "isiZulu"),
+    ("tell me in Xitsonga about the history of Limpopo", "Xitsonga"),
+    ("answer in Setswana with examples", "Setswana"),
+    ('say "hello" in isiXhosa', "isiXhosa"),
+    ("in Sepedi, explain photosynthesis", "Sepedi"),
+])
+def test_requests_with_more_after_the_name_are_still_recognised(query, expected):
+    """Tightening against adjectives must not lose real requests that
+    carry on past the language name.
+    """
+    from bao.services.language_detector import named_target_language
+
+    assert named_target_language(query) == expected
+
+
+def test_the_badge_says_why_the_reply_language_differs():
+    """Two reasons can make the reply language differ from the detected
+    one, and they mean opposite things.
+
+    The badge was written when a weak detection was the only reason, so
+    "explain calculus in xitsonga" — English at 83%, with Xitsonga asked
+    for — produced "too unsure to use" on a confident detection. That is
+    the line an examiner reads as the detector being broken.
+    """
+    from bao.ai.orchestrator import PipelineResult
+    from bao.ui.streamlit_app import _format_detection_badge
+
+    asked = PipelineResult(
+        text="...", detected_language="English", confidence=0.83,
+        detection_backend="tflite", source="gemini", latency_ms=0,
+        reply_language="Xitsonga", language_was_requested=True)
+    badge = _format_detection_badge(asked)
+    assert "you asked for Xitsonga" in badge
+    assert "unsure" not in badge
+
+    weak = PipelineResult(
+        text="...", detected_language="siSwati", confidence=0.35,
+        detection_backend="tflite", source="gemini", latency_ms=0,
+        reply_language="English")
+    assert "too unsure to use, replying in English" in _format_detection_badge(weak)
+
+
+def test_answers_do_not_depend_on_the_audio_stack(monkeypatch):
+    """The README states that Bao is text-first and that removing the
+    whole speech stack changes nothing about the answers. That is the
+    property Deaf users actually rely on, so it is pinned rather than
+    asserted: the same questions must produce the same text and source
+    with every speech backend present and with every one absent, and
+    speaking must degrade with a stated reason rather than raise.
+    """
+    import bao.services.speech as speech
+    from bao.bootstrap import build_orchestrator, for_session
+
+    _, shared = build_orchestrator()
+    questions = ["Avuxeni", "Sawubona", "what are the emergency numbers in south africa"]
+
+    with_audio = [for_session(shared).handle(q, force_offline=True) for q in questions]
+
+    for flag in ("_HAS_MMS_BACKEND", "_HAS_EDGE_BACKEND", "_HAS_STT_BACKEND",
+                 "_HAS_COQUI_BACKEND"):
+        monkeypatch.setattr(speech, flag, False)
+    silent_session = for_session(shared)
+    without_audio = [silent_session.handle(q, force_offline=True) for q in questions]
+
+    for a, b in zip(with_audio, without_audio):
+        assert (a.text, a.source) == (b.text, b.source)
+
+    spoken = silent_session.speak(without_audio[0])
+    assert spoken.audio is None
+    assert spoken.speech_error, "a missing voice must be explained, not silent"

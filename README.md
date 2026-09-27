@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/RinsunaMahani/bao-ai/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RinsunaMahani/bao-ai/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.10%20%7C%203.12-3776AB?logo=python&logoColor=white">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.11%20%7C%203.14-3776AB?logo=python&logoColor=white">
   <img alt="Streamlit" src="https://img.shields.io/badge/UI-Streamlit-FF4B4B?logo=streamlit&logoColor=white">
   <img alt="TensorFlow Lite" src="https://img.shields.io/badge/On--device%20ML-LiteRT%20%2F%20TFLite-FF6F00?logo=tensorflow&logoColor=white">
   <img alt="scikit-learn" src="https://img.shields.io/badge/Retrieval-scikit--learn-F7931E?logo=scikitlearn&logoColor=white">
@@ -67,9 +67,10 @@ instructions.
 
 Bao AI is a South African multilingual assistant built for research,
 accessibility, and offline-first knowledge delivery — combining offline
-TF-IDF retrieval, rule-based language identification (with an optional
-on-device ML upgrade path), and Gemini-powered generation across all 11
-official South African languages.
+TF-IDF retrieval, on-device language identification (an LSTM classifier,
+with a keyword matcher for the short greetings it cannot read), and
+Gemini-powered generation across all 11 spoken official South African
+languages.
 
 ## Why this project stands out
 
@@ -78,12 +79,19 @@ official South African languages.
   [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full diagram and
   the reasoning behind every major design decision.
 - Offline RAG retrieval with local TF-IDF search across a curated South
-  African knowledge base — **100% top-1 self-retrieval accuracy** on the
-  current 52-entry dataset (`python evaluate.py`, reproducible).
+  African knowledge base — **100% top-1 self-retrieval accuracy** over the
+  38 reviewed rows it serves (`python evaluate.py`, reproducible). The
+  knowledge base holds 52 rows; the other 14 are translations awaiting a
+  first-language speaker's review and are deliberately not served until
+  then.
 - A pluggable language detector: an LSTM classifier (trained on the NCHLT
-  South African corpus, 3.29M parameters) as the default, with a
-  zero-dependency keyword heuristic as an automatic fallback — behind the
-  exact same interface (`services/language_detector.py`). Two real,
+  South African corpus, 3.29M parameters) as the default, paired with a
+  zero-dependency keyword matcher — behind the exact same interface
+  (`services/language_detector.py`). The two fail on opposite inputs: the
+  classifier's vocabulary is news sentences, so a lone greeting like
+  "Sawubona" is entirely out of vocabulary to it, while the keyword list
+  knows exactly those words. Pairing them took single-word greetings from
+  6/15 to 14/15 answered in the right language. Two real,
   silent deployment bugs (wrong text preprocessing, wrong output-class
   ordering) were found and fixed by testing against the real model, not
   assumed correct because the training results looked good — see
@@ -148,14 +156,20 @@ bao/
 ├── services/      # language_detector.py, translation.py, speech.py, offline.py
 ├── core/          # config.py, logging.py, security.py, exceptions.py
 ├── ui/            # streamlit_app.py, console_app.py
+├── bootstrap.py   # builds the pipeline once; for_session() gives each visitor their own
 └── evaluation.py  # retrieval + language-detector accuracy harness
 
 data/               # african_data.csv — offline knowledge base
-models/             # language_classifier.tflite — optional ML language detector
-tests/              # pipeline, retrieval, detection, memory, security, RAG evaluation
-docs/               # ARCHITECTURE.md, TECHNICAL_REPORT.md
+models/             # language_classifier.tflite (default detector), pan-African bundle
+tests/              # unit, integration and AppTest UI tests
+docs/               # ARCHITECTURE.md, TECHNICAL_REPORT.md, TRANSLATION_REVIEW.md
 docker/             # Dockerfile, docker-compose.yml
-scripts/            # gates.py, scorecard.py, probe_tts.py, compare_detectors.py, audit_corpus.py
+scripts/
+├── preflight.py              # is THIS machine ready to demo? run before presenting
+├── probe_language_routing.py # is each language answered in itself, end to end?
+├── check_archive.py          # refuses to let a shared zip carry secrets
+├── gates.py, scorecard.py    # hard gates and a summary before review
+└── …                         # voice probes, detector comparison, corpus audit
 evaluate.py         # CLI evaluation runner
 benchmark_bao.py    # CLI benchmark runner
 bao_console.py      # console entrypoint
@@ -180,7 +194,7 @@ of the ~96 MB of model weight kept out of any deployment image.
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.11+ (3.10 cannot load the pickled language model faithfully — see `pyproject.toml`)
 - Docker Desktop (optional, for containerized deployment)
 - A `GEMINI_API_KEY` in a `.env` file for online generation (the app runs
   fully offline without one — see Architecture above)
@@ -199,6 +213,20 @@ python -m pip install -r requirements-speech.txt   # TTS/STT
 python -m pip install -r requirements-pdf.txt       # PDF document uploads
 python -m pip install -r dev-requirements.txt       # pytest, ruff
 ```
+
+### Check the machine is ready
+
+```bash
+python scripts/preflight.py            # no API calls
+python scripts/preflight.py --online   # also spends one Gemini request
+```
+
+The test suite proves the code is correct on any machine. This proves
+*this* machine is ready — that the Git LFS model files actually
+downloaded, the voices load, the API key still works. Those are what fail
+on the day, and none of them are code bugs, so nothing in the test suite
+would catch them. `WARN` means a feature is unavailable and the app will
+say so; only `FAIL` blocks a demo.
 
 ### Run locally
 
@@ -243,6 +271,11 @@ returns its text answer.
 docker compose -f docker/docker-compose.yml up --build -d
 ```
 
+The image includes the TFLite classifier, the pan-African detector and PDF
+uploads, and runs offline without a `.env`. It leaves out speech (torch and
+the voice models are several GB). Compose mounts `bao/`, `data/` and
+`models/` from the host for development, so edits appear without a rebuild.
+
 ## Testing & linting
 
 ```bash
@@ -254,8 +287,8 @@ The suite covers the security guardrails, language
 detector, knowledge retrieval (including the documented TF-IDF false
 positive limitation below), conversation memory, and the full orchestrator
 pipeline end to end, offline. CI (`.github/workflows/ci.yml`) runs both
-`ruff check .` and the full test suite, plus `evaluate.py`, on Python 3.10
-and 3.12 for every push and pull request.
+`ruff check .` and the full test suite, plus `evaluate.py`, on Python 3.11
+(the supported floor) and 3.14 for every push and pull request.
 
 ## Evaluation
 
@@ -312,6 +345,13 @@ production default rather than an optional extra: it resolves precisely
 the case the simpler approach cannot. Pinned by
 `tests/test_language_detector.py::test_disambiguates_the_closely_related_sotho_tswana_group`.
 
+A bare "Dumela", with nothing after it, is the same text in all three
+languages, so no detector can separate it. The sidebar's **Reply in**
+picker lets the visitor say which language they mean; it defaults to
+"Detect automatically". Each of the three languages has its own curated
+greeting, so the test checks the answer as well as the badge:
+`tests/test_streamlit_app.py::test_reply_in_settles_a_greeting_three_languages_share`.
+
 ### Retrieval precision and recall
 
 `python evaluate.py --rag-eval eval/rag_eval.csv` scores retrieval against
@@ -356,9 +396,11 @@ currency of south africa" gets nothing, because the two share almost no
 content words and TF-IDF has nothing else to go on.
 
 That trade-off is not a tuning mistake. `python sweep_gates.py` sweeps
-both gates together across 24 combinations; F1 varies by only 0.128
-across the entire grid and the shipped configuration is already the
-global best. The gates trade against each other rather than compounding,
+both gates together across 24 combinations; F1 stays between 0.687 and
+0.821 across the whole grid. The best point (threshold 0.15, F1 0.821)
+beats the shipped 0.25 (F1 0.800) by one paraphrase query, measured on the
+set the thresholds were chosen on, so the default was not moved for it.
+The gates trade against each other rather than compounding,
 so **no setting of these constants closes the paraphrase gap** — that
 requires a different representation. This is the measured,
 evidence-based case for semantic embeddings, and it names the specific
@@ -373,35 +415,85 @@ be re-swept per backend rather than carried over as a constant.
 and the shipped behaviour separately, so if either stops holding, the
 docs are what need updating.
 
-Concrete examples of the failure mode, all scoring against a fact about
-South Africa's *currency*:
+How the false positives were closed, measured against the fact about
+South Africa's *currency* that unrelated questions used to land on:
 
-| Unrelated query | Similarity |
-|---|---|
-| "who is the current president of south africa" | 0.765 |
-| "what is the population of south africa" | 0.759 |
-| "what is the history of the roman empire" | 0.543 |
-| "what is the speed of light" | 0.532 |
+| Unrelated query | Originally | Now | Served as verified? |
+|---|---|---|---|
+| "what is the speed of light" | 0.532 | 0.000 | no |
+| "what is the history of the roman empire" | 0.543 | 0.000 | no |
+| "who is the current president of south africa" | 0.765 | 0.602 | no — coverage gate |
+| "what is the population of south africa" | 0.759 | 0.602 | no — coverage gate |
 
-That last one is the clearest statement of the problem: *"what is the
-speed of light"* scores 0.53 against a currency fact purely on the shared
-function words "what is the of". No threshold separates that from a
-legitimate paraphrase scoring in the same band — which is why this is a
-retrieval-method limitation, not a tuning problem.
+Two different failures, two different fixes. The first pair matched on
+function words alone ("what is the of"); the curated stop-word list in
+`knowledge/embeddings.py` removed them, taking both to 0.000. The second
+pair still share real content words ("south africa") with the currency
+row and still score 0.60 — no similarity threshold can separate that from
+a legitimate paraphrase in the same band — so the coverage gate rejects
+them instead, because most of what they ask about ("president",
+"population") is not in the knowledge base's vocabulary at all. None of
+the four is returned as a verified answer. Reproduce with
+`KnowledgeRetriever.best_match_index` and `lookup`.
 
-`python compare_retrievers.py` runs a semantic-embedding backend against
-this same evaluation set for a like-for-like comparison (requires
-`requirements-semantic.txt`). That experiment has not been run in this
-repository yet — the TF-IDF numbers above are measured; the semantic
-column is whatever your run produces.
+### TF-IDF against semantic embeddings
+
+`python compare_retrievers.py` runs a semantic-embedding backend
+(`paraphrase-multilingual-MiniLM-L12-v2`) against the same 70 queries
+(requires `requirements-semantic.txt`). The rule for adopting it was set
+before the first run: better paraphrase recall **without** giving back
+negative rejection. Measured on 2026-09-27:
+
+| Backend | Exact | Paraphrase | Negative (correctly rejected) | F1 |
+|---|---|---|---|---|
+| **TF-IDF, shipped** (threshold 0.25, coverage 0.7) | **15/15** | **7/15** | **37/40** | **0.800** |
+| Semantic at 0.25 | 15/15 | 14/15 | 17/40 | 0.707 |
+| Semantic at its best threshold, 0.55 | 15/15 | 12/15 | 34/40 | 0.857 |
+
+**TF-IDF stays the default. Semantic embeddings are the better
+representation for paraphrases, and they still don't pass the rule:**
+
+- **No threshold meets the rule.** The higher F1 at 0.55 comes from five
+  more paraphrases answered, and three more unrelated questions answered
+  as *verified* facts. A confident wrong answer tagged as verified is the
+  failure this project guards against hardest, so F1 is the wrong
+  tiebreaker here.
+- **Its best threshold sits on a knife edge.** Between 0.50 and 0.60,
+  paraphrase recall falls from 14/15 to 7/15 while negative rejection
+  rises from 29/40 to 39/40. A threshold that sensitive, chosen on the
+  same 70 queries it is scored on, would not be trusted with real
+  traffic.
+- **The test says nothing about this project's languages.** The
+  evaluation set is English, and the model card's list of 50+ training
+  languages includes none of South Africa's ten other official languages,
+  not even Afrikaans.
+- **Cost.** It brings in torch and about 470 MB of weights, where TF-IDF
+  is fitted in a second from the knowledge base. That would end the
+  lightweight offline Docker image.
+
+The coverage gate has no effect on the semantic backend, by design, since
+it corrects a TF-IDF-specific failure. A one-off probe that applied
+TF-IDF's coverage score to semantic matches did meet the rule, at coverage
+0.6 and threshold 0.55: 8/15 paraphrases and 38/40 negatives. That is one
+query better in each category, and a margin of one query on a
+development set is noise. What the experiment does establish is that
+paraphrase recall is fixable by a change of representation (14/15 at low
+thresholds). So the next steps are an embedding model trained on South
+African languages and a larger evaluation set held out from tuning, not
+more tuning of TF-IDF.
 
 ## Developer notes
 
 - Config resolution, model paths, and the Gemini model name all come from
   one place: `core/config.py::Settings`. Nothing else hardcodes them.
-- The knowledge base, TF-IDF vectorizer, and Gemini client are constructed
-  once per process (`st.cache_resource` in the Streamlit UI) instead of
-  being rebuilt on every rerun.
+- The read-only parts of the pipeline — the language classifier, the
+  knowledge base and its TF-IDF index, the Gemini client — are built once
+  per server (`st.cache_resource`) and shared. The parts that hold a
+  visitor's data — conversation memory and uploaded documents — are built
+  per session (`bootstrap.for_session`). `st.cache_resource` is shared
+  across *all* visitors, so an earlier version that handed its object
+  straight to the page let one visitor's conversation and uploads reach
+  the next. See "Sessions and concurrency" in `docs/ARCHITECTURE.md`.
 - Speech synthesis and the ML language detector both degrade gracefully —
   missing `torch`/`transformers`/`tensorflow`/`edge-tts` disables one
   feature, never crashes the app at import time. A speech failure (no
@@ -413,16 +505,80 @@ column is whatever your run produces.
 - Structured JSON logging (`core/logging.py`) carries live CPU/RAM
   telemetry on every log line.
 
+## Accessibility and SASL
+
+South African Sign Language became the 12th official language on 19 July
+2023. **Bao does not support it**, and that was checked rather than
+assumed:
+
+- **No public SASL dataset exists.** The field's own dataset catalogue
+  lists none, against roughly 8–10 for American Sign Language. A 2014
+  University of Cape Town dataset is data-glove sensor readings (it cannot
+  train a camera-based system), and a 2024 UCT corpus of 5,047 signed
+  sentences was never publicly released.
+- **The state of the art is not yet usable.** That 2024 thesis reports
+  sign-to-text translation at **BLEU-4 1.35** on its own corpus, "very far
+  from practical" in the author's words; the same method scores 13.23 on
+  a German benchmark.
+- **Open tools do not cover it.** sign.mt, the leading open-source
+  text↔sign system, works reasonably well for American, German and
+  Brazilian sign languages only.
+- **Tooling is not the blocker; data is.** MediaPipe installs and runs on
+  this project's Python. What is missing is an annotated corpus, and the
+  Deaf-community partnership needed to build one properly.
+
+What Bao does offer Deaf users is that it is **text-first and works fully
+with no audio at all** — every answer is on screen before any voice
+begins, and removing the whole speech stack changes nothing about the
+answers. Full reasoning, the one narrow feasible piece (fingerspelling)
+and why it alone should not be called SASL support, plus sources:
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), "Accessibility and SASL".
+
 ## Known limitations
 
 Stated here so they are read rather than discovered.
 
-- **Speech covers 4 of 11 languages.** English, Afrikaans and isiZulu have
-  real South African voices (edge-tts, online); Xitsonga has an offline
-  one. The other seven have **no open text-to-speech model at all** —
-  verified against Hugging Face with an authenticated request on
-  2026-08-30, where `mms-tts-xho`, `-sot`, `-tsn`, `-nso`, `-ven`, `-ssw`
-  and `-nbl` all return 404. Those languages answer in text.
+- **Speech covers 11 of 11 South African languages in this deployment,
+  4 of 11 on a fresh clone.**
+  English, Afrikaans and isiZulu have real South African voices (edge-tts,
+  online); Xitsonga has an offline one. No *pretrained MMS* voice exists
+  for the other seven — verified against Hugging Face with an
+  authenticated request on 2026-08-30, where `mms-tts-xho`, `-sot`,
+  `-tsn`, `-nso`, `-ven`, `-ssw` and `-nbl` all return 404. Those seven
+  are covered by a multilingual South African VITS model, enabled here via
+  `[speech].enable_coqui_sa` in `config.toml`. **The code default is off,
+  and deliberately so: the model is cc-by-nc-4.0 while this project is
+  MIT, so enabling it makes a deployment non-commercial.** That is
+  appropriate for an academic project and would not be for a product. The
+  model is gated on Hugging Face (automatic approval) and downloaded at
+  runtime, never vendored. Its own model card is an unfilled template with
+  no published evaluation, so its quality is not independently verified
+  here. Its 138-symbol vocabulary also lacks `š`, the Tshivenda dental set
+  `ṱ ḓ ṋ ḽ`, and `ō ē`; Coqui discards unknown symbols, so those are
+  folded to their nearest equivalents before synthesis rather than being
+  dropped mid-word.
+- **Pan-African speech covers 12 of 14.** Enabling the pan-African
+  detector brings twelve offline MMS voices, four of which also have a
+  Microsoft neural locale (Amharic, French, Somali, Swahili) — all probed
+  on 2026-09-18 rather than assumed. Igbo and Lingala have no voice:
+  `mms-tts-ibo` and `mms-tts-lin` 404 under every code tried.
+- **Luganda is detected as Xitsonga.** The pan-African model identifies it
+  correctly but at 43% confidence, just under the 44% that English reaches
+  as Nigerian Pidgin. Admitting Luganda would mean relabelling English, so
+  24 of 25 languages route correctly and this one does not. Reproduce with
+  `python scripts/probe_language_routing.py`. A Luganda speaker can still
+  get Luganda replies by choosing it under **Reply in** in the sidebar.
+- **Gemini free-tier quotas are small, and they are per model.** Measured
+  on `gemini-3.6-flash`: 5 requests a minute and 20 a day, which is about
+  one demo. This deployment uses `gemini-3.5-flash`, chosen by measuring
+  availability across the flash models (see `config.toml`); switching
+  `[model].gemini_model` gives a fresh budget because each model has its
+  own. A knowledge-base fact translated into another language costs a
+  request of its own. The app reports this as a quota
+  message carrying the provider's own wait time rather than as a failure,
+  and does not retry a wait it has been told is long — quick retries would
+  spend more of the same quota. Transient 503s (the model being busy) *are*
+  retried, up to `[model].generation_max_attempts`.
 - **The 0.98 macro F1 is the original training-corpus evaluation.** This
   project independently validated the *deployed* inference path (20/20
   across three small probe sets), which is not the same claim.
@@ -441,16 +597,13 @@ Stated here so they are read rather than discovered.
 
 ## Next improvements
 
-- **South African Sign Language** — SASL became the country's 12th official
-  language in 2023, so a complete multilingual assistant should eventually
-  support it. A static hand-shape prototype was removed from this codebase
-  because it was never trained: usable recognition needs continuous video
-  (most SASL vocabulary is movement, not a pose) and non-manual markers
-  carried on the face, which hand landmarks cannot see. That is a separate
-  project rather than a feature of this one.
-- Swap `knowledge/embeddings.py`'s TF-IDF implementation for a real
-  multilingual sentence-embedding model to close the false-positive gap
-  documented above.
+- **South African Sign Language** — the right long-term direction, and
+  blocked on data rather than code: see "Accessibility and SASL" above.
+  The first step is an annotated corpus built with the Deaf community.
+- An embedding model trained on South African languages, evaluated on a
+  held-out multilingual set. The general multilingual model has been
+  measured and does not justify a swap on its own (see "TF-IDF against
+  semantic embeddings" above).
 - Reproduce the original 63,613-sentence NCHLT held-out test evaluation
   against this exact deployment, if that dataset becomes available — the
   current 20/20 spot-check and 100% benchmark result are strong evidence

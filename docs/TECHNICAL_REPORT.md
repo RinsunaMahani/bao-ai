@@ -79,9 +79,33 @@ Two interchangeable implementations behind one interface:
   evaluation and a real deployment-bug story worth reading before citing
   the underlying model's training-time accuracy figure as this
   deployment's own.
-- **Heuristic (automatic fallback):** keyword-marker matching across all
-  11 languages, zero model-loading cost, used automatically if the ML
-  model or its tokenizer files are missing.
+- **Keyword matcher (paired with the classifier):** marker-word matching
+  across all 11 languages, with zero model-loading cost. It stands in
+  entirely if the model or its tokenizer files are missing, and it also
+  answers, at runtime, the input the classifier cannot read. The
+  classifier's vocabulary comes from NCHLT news sentences, so a lone
+  greeting such as "Sawubona" or "Avuxeni" is wholly out of vocabulary to
+  it and it returns the same constant prior for all of them — measured,
+  nine greetings across eight languages all came back as siSwati at
+  exactly 35%. The keyword list contains precisely those words. It is
+  consulted only when the classifier is unsure and only when it actually
+  recognised a word, and it can never overrule a confident classification.
+  Single-word greetings went from 6/15 to 14/15 answered in the right
+  language; the remaining miss, "Dumela", is the greeting in Sepedi,
+  Sesotho and Setswana alike and cannot be resolved from the word alone.
+- **Pan-African extension (optional):** a character n-gram classifier for
+  14 further languages (Amharic, French, Hausa, Igbo, Lingala, Luganda,
+  Oromo, Nigerian Pidgin, Kirundi, Shona, Somali, Swahili, Tigrinya,
+  Yoruba). The two models are not calibrated against each other, so their
+  confidences are never compared directly; the pan-African model's own
+  confidence decides, with a threshold taken from measurement — it never
+  exceeded 44% on 24 South African inputs, and was correct on all 14
+  pan-African sentences tested at 43–89%. Walking one sentence per language
+  through the whole pipeline (`scripts/probe_language_routing.py`), 24 of
+  25 are answered in the language they were written in. Luganda is the
+  miss: identified correctly but at 43%, just under the 44% English
+  reaches as Nigerian Pidgin, and admitting it would mean relabelling
+  English.
 
 ### 3.3 Generation
 
@@ -91,12 +115,39 @@ The model in use is centrally configured (`config.toml` /
 
 ### 3.4 Optional modalities
 
-Text-to-speech output (MMS-TTS, per-language voice models) and a static,
-single-frame sign-language hand-shape classifier (MediaPipe hand-landmark
-extraction plus a small scikit-learn classifier trained on
-self-collected data) are both implemented as genuinely optional
-capabilities: absent dependencies or missing trained assets degrade the
-specific feature, never the core application.
+Text-to-speech output is implemented as a genuinely optional capability:
+absent dependencies or missing trained assets degrade the specific
+feature, never the core application. Three backends are selected per
+language, each only where it is the best available: Microsoft's neural
+voices (online; real en-ZA, af-ZA and zu-ZA locales), Meta's MMS-TTS
+(offline; Xitsonga, and twelve of the pan-African languages), and a
+multilingual South African VITS model covering all eleven, enabled in this
+deployment for the seven that have no other voice. A voice is chosen from
+the language the reply is SPOKEN in — its opening — rather than from every
+language that appears in it, because replies routinely quote lyrics or
+terms in another language. Where no voice exists the interface says so
+rather than substituting one silently. Replies are read in full: for a
+user who cannot easily read the screen the voice is the answer, not a
+flourish on it.
+
+A static, single-frame sign-language hand-shape classifier (MediaPipe
+hand landmarks feeding a small scikit-learn classifier) was prototyped
+and then **removed**; it was never trained, and static hand poses cannot
+represent a language whose vocabulary is movement and whose grammar is
+carried partly by non-manual markers.
+
+South African Sign Language is therefore not supported, and the reason
+was checked rather than assumed. No public SASL dataset exists: the field's
+own dataset catalogue lists none, against roughly 8–10 for ASL. The only
+SASL video corpus found — 5,047 sentences, about five hours, from a 2024
+University of Cape Town master's thesis — is not publicly released, and
+the thesis's own sign-to-text result on it is BLEU-4 1.35, described by
+its author as "very far from practical" (the same approach scores 13.23 on
+a German benchmark). The leading open-source text↔sign system, sign.mt,
+works reasonably well for American, German and Brazilian sign languages
+only. The blocker is data and Deaf-community partnership, not tooling:
+MediaPipe installs and runs on this project's Python. Sources and the full
+reasoning are in "Accessibility and SASL" in `docs/ARCHITECTURE.md`.
 
 ## 4. Evaluation
 
@@ -207,8 +258,9 @@ This 20/20 result is real, reproducible evidence, but it is not the same
 claim as "0.98 Macro F1 confirmed for this deployment" — the original
 63,613-sentence held-out test set isn't available to re-run here. The
 model is the default detector in the running application
-(`prefer_ml=True`), with the heuristic as an automatic fallback if the
-model or tokenizer files are ever missing, on the strength of the 20/20
+(`prefer_ml=True`), paired with the keyword matcher for input it cannot
+read and replaced by it if the model or tokenizer files are ever missing
+(Section 3.2), on the strength of the 20/20
 evidence and the independently-confirmed architecture match — not on the
 strength of the unreproduced training-time number alone.
 
@@ -242,12 +294,26 @@ question — all verified to behave correctly with no exceptions.
   fact translated into another language still costs one API round trip,
   a real reliability dependency for offline-first claims about that
   specific path.
-- **Speech coverage is partial**: four of the eleven languages have a
-  voice (English, Afrikaans and isiZulu via edge-tts; Xitsonga via Meta
-  MMS). The other seven have no open text-to-speech model — verified
-  against Hugging Face with an authenticated request on 2026-08-30, where
-  `mms-tts-xho`, `-sot`, `-tsn`, `-nso`, `-ven`, `-ssw` and `-nbl` all
-  return 404. Replies in those languages are shown as text.
+- **Speech coverage depends on one configuration switch**: four of the
+  eleven languages have a voice with the shipped code defaults (English, Afrikaans and
+  isiZulu via edge-tts; Xitsonga via Meta MMS). No pretrained MMS voice
+  exists for the other seven — verified against Hugging Face with an
+  authenticated request on 2026-08-30, where `mms-tts-xho`, `-sot`,
+  `-tsn`, `-nso`, `-ven`, `-ssw` and `-nbl` all return 404. A multilingual
+  South African VITS model covers all eleven and is enabled in this
+  deployment, taking native coverage to 11 of 11 South African and 23 of
+  25 detectable languages. It is off in the code defaults because it is
+  licensed cc-by-nc-4.0 while this project is MIT, so enabling it makes a
+  deployment non-commercial, and because its model card carries no
+  evaluation this project could check — its audio quality is therefore
+  reported as unverified rather than measured.
+- **Alternatives were ruled out by measurement, not assumption**: Google
+  Translate's TTS endpoint returns HTTP 400 for all nine indigenous South
+  African languages, so it can translate them but not speak them;
+  Microsoft publishes 322 voices of which 11 are relevant locales, which
+  is the three already used; and the one apache-2.0 alternative covering
+  part of the gap is a 6.63 GB 3B-parameter model, the wrong shape for an
+  offline-first system on modest hardware.
 - **The 0.98 macro F1 is the original training-corpus evaluation**, not a
   figure this project independently reproduced. What was independently
   validated is the *deployed inference path*: 20/20 across three small
@@ -264,6 +330,10 @@ question — all verified to behave correctly with no exceptions.
   considering it for production use.
 - Query resolution against conversation memory before knowledge-base
   retrieval, not just before Gemini generation.
-- Continuous/dynamic sign-language recognition, requiring sequence
-  modeling rather than single-frame classification — a materially larger
-  project than the current static prototype.
+- South African Sign Language. Continuous recognition needs pose, hand
+  and face tracking with a sequence model, and a public annotated SASL
+  corpus that does not yet exist — so the first step is building one with
+  the Deaf community, not writing a model. A narrower, feasible piece is
+  SASL fingerspelling (the one-handed manual alphabet), but it needs
+  self-recorded data from several signers checked letter by letter by a
+  SASL signer, and it covers spelling rather than conversation.

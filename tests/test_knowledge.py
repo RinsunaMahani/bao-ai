@@ -121,3 +121,109 @@ def test_chunk_text_long_document_multiple_chunks():
     long_text = " ".join(["word"] * 1000)
     chunks = chunk_text(long_text, source_name="long.txt", chunk_size=300, chunk_overlap=50)
     assert len(chunks) > 1
+
+# --- re-indexing the same upload ----------------------------------------
+
+
+def test_reindexing_a_document_replaces_it_rather_than_duplicating():
+    """The uploader keeps its files across reruns, so pressing "Index
+    Uploaded Documents" again re-indexed everything. The visible cost was
+    in the prompt: the same passage was handed to Gemini twice, paying for
+    the tokens and inviting the model to read a repetition as emphasis. It
+    also distorts TF-IDF, which weights terms by how many chunks hold them.
+    """
+    from bao.knowledge.retriever import DocumentRetriever
+
+    dr = DocumentRetriever()
+    doc = "The submission deadline is 14 November 2026. The supervisor is Dr Mokoena."
+    for _ in range(3):
+        dr.add_document("handbook.pdf", doc)
+
+    assert len(dr) == 1
+    assert dr.search("when is the deadline").count("[Document:") == 1
+
+
+def test_a_different_document_still_adds():
+    """Replacement must key on the document, not clear the store."""
+    from bao.knowledge.retriever import DocumentRetriever
+
+    dr = DocumentRetriever()
+    dr.add_document("a.txt", "Registration opens in January.")
+    dr.add_document("b.txt", "Graduation is held in April.")
+    dr.add_document("a.txt", "Registration opens in January.")
+    assert dr.sources == ["a.txt", "b.txt"]
+    assert len(dr) == 2
+
+
+def test_a_document_whose_name_prefixes_another_is_not_swallowed():
+    """Chunk ids embed the source name, so matching on an id prefix would
+    make re-indexing "notes.txt" also delete "notes.txt.backup".
+    """
+    from bao.knowledge.retriever import DocumentRetriever
+
+    dr = DocumentRetriever()
+    dr.add_document("notes.txt", "Registration opens in January.")
+    dr.add_document("notes.txt.backup", "Graduation is held in April.")
+    dr.add_document("notes.txt", "Registration opens in February.")
+    assert set(dr.sources) == {"notes.txt", "notes.txt.backup"}
+
+
+def test_the_store_has_a_ceiling():
+    """Nothing bounded this: every upload appended, so a large PDF
+    re-indexed a few times grew both the store and the per-add refit cost
+    without limit. Reaching the ceiling is reported, not silent.
+    """
+    from bao.knowledge.retriever import DocumentRetriever
+
+    dr = DocumentRetriever(chunk_size=10, chunk_overlap=0, max_chunks=5)
+    added = dr.add_document("big.txt", " ".join(f"word{i}" for i in range(500)))
+    assert added == 5
+    assert len(dr) == 5
+    assert dr.add_document("another.txt", "more text entirely") == 0
+
+
+def test_clearing_really_drops_everything():
+    """Uploaded documents are the user's own, so `clear` has to mean it."""
+    from bao.knowledge.retriever import DocumentRetriever
+
+    dr = DocumentRetriever()
+    dr.add_document("private.txt", "Confidential medical results for one person.")
+    dr.clear()
+    assert len(dr) == 0
+    assert dr.sources == []
+    assert dr.search("medical results") == ""
+
+
+# --- uploads that are not what they claim to be --------------------------
+
+
+@pytest.mark.parametrize("filename,payload", [
+    ("corrupt.pdf", b"this is definitely not a pdf"),
+    ("empty.pdf", b""),
+    ("truncated.pdf", b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog"),
+    ("weird.exe", b"MZ\x90\x00binary"),
+    ("noext", b"some text with no extension"),
+    ("bad_utf8.txt", b"\xff\xfe\x00invalid utf8 \xc3\x28"),
+    ("malformed.csv", b'a,b\n"unclosed quote,c\n'),
+])
+def test_an_unreadable_upload_returns_nothing_rather_than_raising(filename, payload):
+    """This is where a file chosen by someone else enters the app, so "not
+    readable" has to be an ordinary outcome.
+
+    A corrupt or empty PDF used to raise out of here, and the Streamlit
+    upload handler has no try/except - so picking the wrong file replaced
+    the page with a traceback during a demo. pypdf raises several distinct
+    types (PdfStreamError, EmptyFileError), which is why the guard is not
+    written against a list of them.
+    """
+    from bao.knowledge.loader import extract_text_from_bytes
+
+    assert isinstance(extract_text_from_bytes(payload, filename), str)
+
+
+def test_a_readable_upload_still_works():
+    """The guard must not swallow success."""
+    from bao.knowledge.loader import extract_text_from_bytes
+
+    assert "deadline" in extract_text_from_bytes(
+        b"The deadline is 14 November.", "notes.txt")

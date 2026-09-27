@@ -48,6 +48,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -198,6 +200,79 @@ class _KerasWordTokenizer:
         return np.array([padded], dtype=np.float32)
 
 
+_TARGET_LANGUAGE_RE = None
+
+
+def named_target_language(query: str) -> str | None:
+    """The language a question ASKS FOR, as in "explain calculus in
+    Xitsonga" — or None when it names none.
+
+    This is a different question from "what language is this written in",
+    and conflating them is what made cross-lingual requests unreliable. The
+    query above is written in English, so detection correctly reports
+    English, the system instruction then reads "Primary response language:
+    English", and the model weighs that header above the request buried in
+    the sentence. Measured on gemini-3.5-flash-lite: "explain gravity in
+    Afrikaans" came back in English on both attempts, and "in xitsonga"
+    came back in English then in something closer to Afrikaans.
+
+    The user stated their language explicitly. That should outrank a guess
+    about the language they happened to type the request in.
+
+    Deliberately narrow, in two ways.
+
+    It needs the preposition immediately before a known language name, so
+    "how many official languages does South Africa have" is unaffected.
+
+    And it needs the name to END the phrase — followed by the end of the
+    text, punctuation, or a function word — because many of these names
+    double as adjectives. "I am interested in French cuisine", "a degree in
+    English literature" and "recipes popular in Somali culture" all put a
+    language name straight after "in", and all five sentences like them
+    were read as requests to switch the reply language until this was
+    added. The difference is what comes next: a request is followed by
+    nothing, or by "please", "for a grade 10 learner", "with examples",
+    "how it works"; a mention is followed by the noun the name describes.
+
+    Matching is case-insensitive because people type "xitsonga" and
+    "Xitsonga" interchangeably.
+    """
+    global _TARGET_LANGUAGE_RE
+    if _TARGET_LANGUAGE_RE is None:
+        from bao.core.config import LABELS, PAN_AFRICAN_LABELS
+
+        # Longest first, so "Nigerian Pidgin" is not shadowed by a shorter
+        # name that happens to be a prefix of it.
+        names = sorted(LABELS + PAN_AFRICAN_LABELS, key=len, reverse=True)
+        pattern = "|".join(re.escape(n.lower()) for n in names)
+        # What may follow the name for it to count as a request. Function
+        # words only — a noun here means the name is describing that noun.
+        # "and" is left out on purpose: "fluent in isiZulu and English" is
+        # a description of a person, not an instruction.
+        followers = (
+            "please|pls|plz|language|languages|only|for|so|too|instead|now|"
+            "thanks|thank|again|if|because|rather|as|with|without|"
+            "what|how|why|when|where|who|which|about"
+        )
+        _TARGET_LANGUAGE_RE = re.compile(
+            rf"\bin\s+({pattern})"
+            rf"(?=\s*$|\s*[.,!?;:)\]\"'»”’]|\s+(?:{followers})\b)",
+            re.IGNORECASE,
+        )
+
+    match = _TARGET_LANGUAGE_RE.search(query)
+    if not match:
+        return None
+
+    from bao.core.config import LABELS, PAN_AFRICAN_LABELS
+
+    found = match.group(1).lower()
+    for name in LABELS + PAN_AFRICAN_LABELS:
+        if name.lower() == found:
+            return name
+    return None
+
+
 class LanguageDetector(ABC):
     @abstractmethod
     def detect(self, text: str) -> DetectionResult: ...
@@ -274,6 +349,19 @@ class TFLiteLanguageDetector(LanguageDetector):
         self.keras_model = None
         self.is_tflite = False
         self._tokenizer: _KerasWordTokenizer | None = None
+        # TFLite inference is three stateful calls against one interpreter
+        # — set_tensor, invoke, get_tensor — so it is not reentrant. The
+        # web app serves each session on its own thread and shares this
+        # object between them, and two sessions detecting at the same
+        # moment made LiteRT raise "There is at least 1 reference to
+        # internal data in the interpreter": measured with three threads,
+        # two of them died outright.
+        #
+        # A lock rather than an interpreter per session, because inference
+        # is about a millisecond while loading the model costs seconds and
+        # ~13 MB. Serialising a millisecond is free; duplicating the model
+        # per visitor is not.
+        self._lock = threading.Lock()
         self._initialize(model_path, fallback_keras_path, tokenizer_config_path)
 
     def _initialize(self, model_path: str, fallback_keras_path: str | None, tokenizer_config_path: str | None) -> None:
@@ -330,11 +418,19 @@ class TFLiteLanguageDetector(LanguageDetector):
         input_data = self._tokenizer.encode(text, maxlen=35)
 
         if self.is_tflite:
-            self.interpreter.set_tensor(self.input_details[0]["index"], input_data)
-            self.interpreter.invoke()
-            output = self.interpreter.get_tensor(self.output_details[0]["index"])
+            with self._lock:
+                self.interpreter.set_tensor(self.input_details[0]["index"], input_data)
+                self.interpreter.invoke()
+                # Copied inside the lock. get_tensor returns a view onto
+                # the interpreter's own buffer, so releasing the lock first
+                # would let the next thread overwrite the numbers this one
+                # is about to read — and LiteRT refuses to invoke at all
+                # while such a reference is outstanding.
+                output = self.interpreter.get_tensor(
+                    self.output_details[0]["index"]).copy()
         else:
-            output = self.keras_model.predict(input_data, verbose=0)
+            with self._lock:
+                output = self.keras_model.predict(input_data, verbose=0)
 
         probabilities = output[0]
         predicted_class = int(np.argmax(probabilities))
@@ -375,6 +471,61 @@ PAN_AFRICAN_LANGUAGE_NAMES = {
     "tir": "Tigrinya",
     "yor": "Yoruba",
 }
+
+
+def _minor(version: str) -> tuple[int, ...]:
+    """(major, minor) of a version string, ignoring the patch level."""
+    return tuple(int(part) for part in re.findall(r"\d+", version)[:2])
+
+
+def sklearn_minor_mismatches(caught) -> list[tuple[str, str]]:
+    """(pickled, installed) scikit-learn versions that differ in MAJOR or
+    MINOR version, from warnings recorded while unpickling.
+
+    scikit-learn warns on ANY version difference when loading a pickle,
+    patch-level included. A patch difference is routine — CI installs the
+    newest 1.9.x while a bundle saved under 1.9.0 is still read faithfully —
+    so treating every warning as a fault turned the suite red each time a
+    patch shipped. A minor difference is the real risk: on Python 3.10, pip
+    can only install scikit-learn 1.7.2, and a 1.9 pickle loaded by 1.7 is
+    the unsafe direction, where failure is silent rather than raised.
+
+    One rule, used by the loader below and by the test that guards it.
+    """
+    mismatches = []
+    for record in caught:
+        if type(record.message).__name__ != "InconsistentVersionWarning":
+            continue
+        pickled = getattr(record.message, "original_sklearn_version", "")
+        installed = getattr(record.message, "current_sklearn_version", "")
+        if _minor(pickled) != _minor(installed):
+            mismatches.append((pickled, installed))
+    return sorted(set(mismatches))
+
+
+def _report_version_skew(caught) -> None:
+    """Silent for a patch difference, loud for a minor one — and every
+    OTHER warning raised while loading is passed through untouched.
+
+    The bundle is loaded under catch_warnings so that the version warnings
+    can be classified, which means everything raised during the load is
+    captured. Dropping the rest would have silenced unrelated warnings
+    along with the ones this is meant to judge — tidier output bought by
+    hiding things. Only the version warnings are this function's business.
+    """
+    for record in caught:
+        if type(record.message).__name__ != "InconsistentVersionWarning":
+            warnings.warn_explicit(
+                record.message, record.category, record.filename, record.lineno)
+    for pickled, installed in sklearn_minor_mismatches(caught):
+        logger.warning(
+            f"The pan-African detector was saved with scikit-learn {pickled} and "
+            f"is being read by {installed}. Across minor versions a pickled model "
+            "is not guaranteed to load faithfully, and it fails silently when it "
+            "does not. Install scikit-learn from the pinned range in "
+            "requirements.txt, or re-save the bundle and re-run its tests: "
+            "python scripts/build_pan_african_bundle.py --reexport"
+        )
 
 
 class SklearnLanguageDetector(LanguageDetector):
@@ -424,13 +575,16 @@ class SklearnLanguageDetector(LanguageDetector):
             return
 
         try:
-            bundle = joblib.load(model_path)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                bundle = joblib.load(model_path)
             self._pipeline = bundle["pipeline"]
             self._labels = [str(label) for label in bundle["labels"]]
         except Exception as e:
             logger.warning(f"Could not load sklearn detector: {e}")
             self._pipeline = None
             return
+        _report_version_skew(caught)
 
         # A bundle whose labels are still encoded integers would "work" and
         # report languages called "0" and "7". Refuse it.
@@ -488,14 +642,61 @@ class CompositeLanguageDetector(LanguageDetector):
     their probabilities are not comparable. Measured on the shipped
     pan-African model:
 
-        South African / English input  ->  16-23% confidence (wrong label)
-        genuine pan-African input      ->  37-95% confidence (right label)
+        South African / English input  ->  13-44% confidence (wrong label)
+        genuine pan-African input      ->  43-89% confidence (right label)
 
-    So a secondary answer is only accepted above `secondary_min`, which
-    sits above everything observed in the first group and below everything
-    observed in the second. That margin comes from eleven probe inputs, not
-    a held-out set — it is deliberately conservative, and erring means
-    falling back to today's behaviour rather than guessing.
+    So a secondary answer is only accepted above a threshold that sits
+    above the first group and below the second, rather than by comparing
+    the two numbers directly.
+
+    TWO THRESHOLDS, because one is not enough — and this corrects a rule
+    that was wrong for a measurable reason rather than a debatable one.
+
+    The original design consulted the secondary ONLY when the primary fell
+    below `primary_min`, on the assumption that a classifier is unsure
+    about input that is not in its languages. That assumption is false. The
+    primary is an 11-class softmax with no "none of the above" output, so
+    out-of-distribution input does not make it hesitate — it makes it pick
+    the nearest of its eleven, confidently. Measured on one sentence per
+    language (scripts/probe_language_routing.py):
+
+        Luganda  -> Xitsonga  100%        Hausa           -> English  97%
+        Yoruba   -> Xitsonga   99%        Nigerian Pidgin -> English  85%
+        Igbo     -> isiZulu    64%        French          -> isiNdebele 63%
+
+    Every one of those clears `primary_min`, so the secondary was never
+    asked, and seven of the fourteen languages were answered in a language
+    the user had not written in. The gate was reading the wrong signal:
+    primary confidence says nothing about whether the input is
+    South African, while secondary confidence does.
+
+    So `secondary_strong` (0.5) accepts a strong secondary answer outright,
+    even over a confident primary. `secondary_min` (0.35) keeps the
+    original, more cautious path for a moderate secondary answer, which is
+    still only taken when the primary is itself unsure.
+
+    Evidence for 0.5, from 24 South African inputs (11 sentences and the 13
+    single-word probes in tests/test_pan_african.py) and 14 pan-African
+    sentences:
+
+        highest secondary confidence on ANY South African input   44%
+        lowest secondary confidence where it was RIGHT             43%
+
+    0.5 clears the first with margin. The 44% case is English read as
+    Nigerian Pidgin, which is the one genuinely hard pair here — Nigerian
+    Pidgin is English-lexifier, so it is confusable with English by
+    construction rather than by accident, and keeping English is the right
+    way to resolve it for this app.
+
+    Known cost, stated rather than hidden: Luganda scores 43% and so falls
+    below the bar, leaving it detected as Xitsonga. Admitting it would mean
+    dropping the threshold under English's 44% and relabelling English as
+    Nigerian Pidgin, which is a worse trade for an app whose lingua franca
+    is English. 24 of 25 languages route correctly.
+
+    These figures come from one sentence per language, not a held-out set.
+    They are enough to show the old rule was wrong and to choose between
+    two candidate thresholds; they are not a calibration claim.
     """
 
     def __init__(
@@ -504,12 +705,14 @@ class CompositeLanguageDetector(LanguageDetector):
         secondary: LanguageDetector,
         primary_min: float = 0.5,
         secondary_min: float = 0.35,
+        secondary_strong: float = 0.5,
         enabled: bool = True,
     ):
         self.primary = primary
         self.secondary = secondary
         self.primary_min = primary_min
         self.secondary_min = secondary_min
+        self.secondary_strong = secondary_strong
         # Flippable at runtime so the UI can offer a toggle. The alternative
         # — rebuilding the pipeline when the setting changes — would mean
         # invalidating Streamlit's @st.cache_resource and reloading the
@@ -523,10 +726,28 @@ class CompositeLanguageDetector(LanguageDetector):
         result = self.primary.detect(text)
         if not self.enabled:
             return result
+
+        # Asked unconditionally. Gating this call on the primary being
+        # unsure is what hid seven languages: the primary is confidently
+        # wrong on input outside its eleven, so it never asked.
+        fallback = self.secondary.detect(text)
+
+        # A strong secondary answer is evidence the input is not South
+        # African at all, which is a claim the primary cannot make about
+        # itself. It therefore outranks a confident primary.
+        if fallback.confidence >= self.secondary_strong:
+            if result.confidence >= self.primary_min:
+                logger.info(
+                    f"Primary confident ({result.language} {result.confidence:.2f}) but "
+                    f"pan-African model is stronger ({fallback.language} "
+                    f"{fallback.confidence:.2f}); taking the pan-African answer."
+                )
+            return fallback
+
+        # Below that, the cautious original path: a moderate secondary
+        # answer is only taken when the primary is unsure too.
         if result.confidence >= self.primary_min:
             return result
-
-        fallback = self.secondary.detect(text)
         if fallback.confidence < self.secondary_min:
             return result
 
@@ -554,7 +775,49 @@ def get_language_detector(prefer_ml: bool = False, model_path: str | None = None
     """
     if prefer_ml and model_path and has_tflite_support(model_path):
         try:
-            return TFLiteLanguageDetector(model_path, fallback_keras_path, tokenizer_config_path)
+            ml = TFLiteLanguageDetector(model_path, fallback_keras_path, tokenizer_config_path)
         except Exception as e:
             logger.warning(f"Falling back to heuristic detector: {e}")
+            return HeuristicLanguageDetector()
+
+        # The heuristic is kept as a RUNTIME fallback, not merely a
+        # load-time one, because the two fail on opposite inputs.
+        #
+        # The classifier is word-level over a 25,000-word vocabulary built
+        # from NCHLT news sentences. A single greeting is not in it, so the
+        # tokenizer emits nothing but OOV markers and the model returns its
+        # prior — the same answer for every such input. Measured: nine
+        # different greetings across eight languages ("Sawubona", "Molo",
+        # "Avuxeni", "Thobela", "Lumela", "Ndaa", "Lotjhani", "Goeiedag",
+        # "Hello") ALL came back as siSwati at exactly 35%. That is not a
+        # detection, it is a constant, and the confidence floor then
+        # correctly refused to act on it — so greetings, which is what
+        # people actually open a conversation with, were all answered in
+        # English.
+        #
+        # Those same words are precisely what the keyword map contains, and
+        # it gets all nine right. So: the model leads on anything it can
+        # read, and the keyword list answers the short input it cannot.
+        #
+        # Thresholds are deliberate, not inherited:
+        #
+        #   secondary_strong is unreachable (1.01). A marker word must
+        #   never overrule a confident model. "Kan jy my help" is Afrikaans
+        #   at 100%, but "help" appears in both the Afrikaans and English
+        #   keyword lists and the English baseline tips it to English at
+        #   90% — allowing a strong-secondary override would turn a correct
+        #   answer into a wrong one.
+        #
+        #   secondary_min is 0.5, which sits above the keyword detector's
+        #   no-match scores (0.05, or 0.20 for its slight English baseline)
+        #   and below a real marker-word hit (0.75). So it is consulted
+        #   only when it actually recognised a word, never when it is
+        #   guessing.
+        return CompositeLanguageDetector(
+            primary=ml,
+            secondary=HeuristicLanguageDetector(),
+            primary_min=0.5,
+            secondary_min=0.5,
+            secondary_strong=1.01,
+        )
     return HeuristicLanguageDetector()

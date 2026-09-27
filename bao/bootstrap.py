@@ -19,6 +19,8 @@ for) — but the pipeline itself is assembled once, in one place.
 """
 from __future__ import annotations
 
+import copy
+
 from bao.ai.client import GeminiClient
 from bao.ai.memory import ConversationMemory
 from bao.ai.orchestrator import Orchestrator
@@ -35,6 +37,7 @@ from bao.services.language_detector import (
     SklearnLanguageDetector,
     get_language_detector,
 )
+from bao.services.speech import enable_coqui_sa, load_local_voices, set_coqui_speaker
 
 logger = get_logger(__name__)
 
@@ -56,6 +59,22 @@ def build_orchestrator(
     the rest of the graph stays identical by construction.
     """
     settings = settings or Settings()
+
+    # Registered here, before anything can ask about voice coverage.
+    # config.toml documented [speech.local_voices] in detail and nothing
+    # read it: there was no Settings property and no caller, so a
+    # checkpoint could be trained, committed and configured while the
+    # speech layer never learned it existed. Registration is global to the
+    # speech module rather than passed down the graph because voice
+    # coverage is a property of the machine, not of one orchestrator.
+    load_local_voices(settings.local_voices)
+
+    # Opt-in, and for a licence reason rather than a technical one: the
+    # model is cc-by-nc-4.0 and this repository is MIT. See
+    # Settings.coqui_sa_enabled. Registered here so the voice tiers know
+    # about it before anything asks what can be spoken.
+    enable_coqui_sa(settings.coqui_sa_enabled)
+    set_coqui_speaker(settings.coqui_sa_speaker)
 
     knowledge_retriever = (
         KnowledgeRetriever(
@@ -112,5 +131,53 @@ def build_orchestrator(
         voice_fallback_related=settings.voice_fallback_related,
         voice_fallback_english=settings.voice_fallback_english,
         min_detection_confidence=settings.min_detection_confidence,
+        max_speech_characters=settings.max_speech_characters,
     )
     return settings, orchestrator
+
+
+def for_session(shared: Orchestrator) -> Orchestrator:
+    """A per-session orchestrator that reuses the expensive, read-only
+    parts of `shared` and gets its own conversation and uploads.
+
+    Streamlit's `@st.cache_resource` caches across ALL users, sessions and
+    reruns — that is its documented purpose, and for the heavy read-only
+    pieces it is exactly right: the TFLite classifier, the fitted knowledge
+    base and the API client are identical for everyone and cost seconds to
+    build.
+
+    Two of the orchestrator's parts are not read-only, and sharing those
+    leaked one person's data into another's request:
+
+      - ConversationMemory is prepended to every prompt, so a second
+        visitor's question arrived carrying the first visitor's
+        conversation as context.
+      - DocumentRetriever holds uploaded files, so a document one person
+        uploaded was retrievable by the next. Demonstrated with a private
+        results file: three differently-worded questions from a second
+        session all returned it.
+
+    Neither was visible from the screen, which is what made it dangerous:
+    `display_messages` lives in session_state and is correctly per-session,
+    so each visitor saw only their own chat bubbles while the model
+    received everybody's.
+
+    A shallow copy rather than a re-listed constructor call. Every tuning
+    value — voice codes, speaking rate, thinking level, the speech cap —
+    is carried across automatically, so a parameter added to Orchestrator
+    later cannot silently stop reaching session orchestrators. Only the
+    fields that must not be shared are replaced.
+    """
+    session = copy.copy(shared)
+    session.memory = ConversationMemory()
+    session.document_retriever = DocumentRetriever()
+
+    # The composite detector carries a mutable `enabled` flag that the
+    # sidebar toggles. Copied too, so one visitor switching the
+    # pan-African languages on does not switch them on for everyone. The
+    # copy is shallow, so both still share the loaded models underneath
+    # and this costs nothing.
+    if isinstance(session.language_detector, CompositeLanguageDetector):
+        session.language_detector = copy.copy(session.language_detector)
+
+    return session

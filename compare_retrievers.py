@@ -10,24 +10,22 @@ modern.
 Requires `pip install -r requirements-semantic.txt` (downloads ~470 MB of
 model weights on first run).
 
-WHY THIS SCRIPT EXISTS RATHER THAN A FINISHED RESULT: the semantic backend
-needs model weights from Hugging Face, which was not reachable from the
-environment where this was written — so the comparison genuinely has not
-been run yet, and this file does not pretend otherwise. The TF-IDF
-baseline below IS measured and reproducible; the semantic column is
-whatever your run produces.
+THE RULE, set before the first run: adopt semantic embeddings only if
+they improve paraphrase recall WITHOUT giving back negative rejection. If
+they don't, keep TF-IDF and document that - a measured negative result is
+a real finding, not a failed experiment.
 
-WHAT TO DO WITH THE RESULT: adopt semantic embeddings only if they
-actually improve paraphrase recall and negative rejection. If they don't,
-keep TF-IDF and document that — a measured negative result is a real
-finding, not a failed experiment. The current TF-IDF baseline to beat:
+MEASURED 2026-09-27, paraphrase-multilingual-MiniLM-L12-v2 on
+sentence-transformers 5.6.1 (70 queries; exact / paraphrase / negative):
 
-    exact       15/15  (100%)
-    paraphrase  11/15  (73%)
-    negative     8/40  (20%)   <- the weak point
-    precision   43.3%
-    recall      92.9%
-    F1          0.591
+    TF-IDF, shipped (threshold 0.25, coverage 0.7)   15/15   7/15  37/40  F1 0.800
+    Semantic at 0.25                                 15/15  14/15  17/40  F1 0.707
+    Semantic at its best threshold, 0.55             15/15  12/15  34/40  F1 0.857
+
+Semantic does not pass the rule at any threshold: its best F1 buys five
+paraphrases by answering three more unrelated questions as verified. The
+README's "Retrieval precision and recall" section has the full reasoning
+and why TF-IDF stayed the default.
 
 INSTALL WARNING: `sentence-transformers` pulls in torch, which can collide
 with an existing TensorFlow install at the native-library level (this was
@@ -63,6 +61,11 @@ def _summarize(name: str, retriever: KnowledgeRetriever, cases, threshold: float
     return {
         "name": name,
         "breakdown": breakdown,
+        # Each backend's similarity scores live on their own scale, so a
+        # threshold tuned for one says nothing about the other. Showing
+        # both at 0.25 alone made the semantic backend look worse than it
+        # is at its own best setting.
+        "best_breakdown": per_category_breakdown(retriever, cases, best.threshold),
         "precision": at_threshold.precision,
         "recall": at_threshold.recall,
         "f1": at_threshold.f1,
@@ -103,6 +106,14 @@ def _print_side_by_side(a: dict, b: dict | None, threshold: float) -> None:
         b_best = f"{b['best_f1']:.3f} @ {b['best_threshold']:.2f}"
         line += f" | {b_best:<18}"
     print(line)
+
+    print("-" * 72)
+    print("At each backend's own best threshold:")
+    for summary in (a, b) if b else (a,):
+        cells = ", ".join(
+            f"{cat} {c}/{t}" for cat, (c, t) in sorted(summary["best_breakdown"].items())
+        )
+        print(f"  {summary['name']:<9} @ {summary['best_threshold']:.2f}: {cells}")
     print("=" * 72)
 
 
@@ -151,7 +162,7 @@ def main() -> int:
         print(
             "\nAdopt the semantic backend only if it genuinely improves paraphrase\n"
             "recall AND negative rejection. If it doesn't, keep TF-IDF and record\n"
-            "that here — a measured negative result is a real finding."
+            "that in the README - a measured negative result is a real finding."
         )
     return 0
 

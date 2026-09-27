@@ -36,8 +36,8 @@ diagram and the module responsibility table. The short version:
 - `bao/ai/` — the Gemini client, prompt templates, conversation memory,
   and `orchestrator.py`, which is the *only* place pipeline sequencing
   should live.
-- `bao/services/` — language detection, translation, speech, sign
-  language, offline-mode policy. Each service does one job and exposes it
+- `bao/services/` — language detection, translation, speech,
+  offline-mode policy. Each service does one job and exposes it
   through a small interface; it should not know about the other services.
 - `bao/ui/` — `streamlit_app.py` and `console_app.py` are rendering layers
   only. If you find yourself writing an `if`/`else` branch here that

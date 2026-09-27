@@ -54,15 +54,24 @@ from bao.ai.prompts import (
     GENERATION_ERROR_MESSAGE,
     OFFLINE_NO_KEY_MESSAGE,
     OFFLINE_NO_MATCH_MESSAGE,
+    generation_busy_message,
     offline_document_excerpt,
     open_ended_prompt,
     system_instruction,
 )
-from bao.core.exceptions import GenerationError, SecurityViolationError
+from bao.core.exceptions import (
+    GenerationError,
+    GenerationUnavailableError,
+    SecurityViolationError,
+)
 from bao.core.logging import get_logger
 from bao.core.security import SecurityGuardrails
 from bao.knowledge.retriever import DocumentRetriever, KnowledgeRetriever
-from bao.services.language_detector import DetectionResult, LanguageDetector
+from bao.services.language_detector import (
+    DetectionResult,
+    LanguageDetector,
+    named_target_language,
+)
 from bao.services.offline import should_use_offline
 from bao.services.speech import resolve_voice_language, synthesize_speech
 from bao.services.translation import translate_fact
@@ -78,7 +87,9 @@ class PipelineResult:
     # "heuristic" | "tflite" — which detector produced `confidence`, so
     # callers don't present it as calibrated when it isn't.
     detection_backend: str
-    source: str  # "knowledge_base" | "gemini" | "document_context" | "offline_fallback" | "blocked"
+    # "knowledge_base" | "gemini" | "document_context" | "offline_fallback"
+    # | "provider_busy" | "blocked"
+    source: str
     latency_ms: float
     audio: bytes | None = None
     audio_mime: str = "audio/wav"
@@ -100,6 +111,10 @@ class PipelineResult:
     # so orchestrator-level state describes whichever turn ran most
     # recently, not the turn being spoken.
     language_was_overridden: bool = False
+    # Whether the QUESTION named the language ("...in Xitsonga"). Treated
+    # the same as an override when choosing the voice: the user said it, so
+    # a detector reading of the reply must not quietly overrule them.
+    language_was_requested: bool = False
     # Set when the reply was spoken by a language other than its own, or not
     # spoken at all. Shown to the user — a substitution they are told about
     # is a fallback; one they are not told about is a misrepresentation.
@@ -128,6 +143,7 @@ class Orchestrator:
         voice_fallback_related: bool = False,
         voice_fallback_english: bool = False,
         min_detection_confidence: float = 0.0,
+        max_speech_characters: int = 0,
     ):
         self.security = security
         self.language_detector = language_detector
@@ -147,6 +163,7 @@ class Orchestrator:
         self.voice_fallback_related = voice_fallback_related
         self.voice_fallback_english = voice_fallback_english
         self.min_detection_confidence = min_detection_confidence
+        self.max_speech_characters = max_speech_characters
 
     def handle(
         self,
@@ -175,12 +192,11 @@ class Orchestrator:
         the user has stated a preference explicitly.
 
         It was introduced for sign input (a recognised sign is a gloss, not
-        a sentence in any spoken language) and outlived that feature. Kept
-        because it is the mechanism a "reply in ..." selector would use,
-        and because it is what makes the pan-African languages reachable
-        when the detector is unsure. Currently exercised by the tests and
-        by scripts/gates.py, not by either interface — remove it if that is
-        still true when the project is next tidied.
+        a sentence in any spoken language) and outlived that feature. It is
+        now what the web UI's "Reply in" picker passes, which is also what
+        makes a pan-African language reachable when the detector is unsure
+        of it. It outranks a language named in the message: the picker is a
+        standing choice the visitor can see, and the badge says it is on.
         """
         start = time.perf_counter()
         timings: dict[str, float] = {}
@@ -239,6 +255,30 @@ class Orchestrator:
             )
             reply_language = "English"
 
+        # An explicitly named language outranks everything above it.
+        #
+        # "explain calculus in Xitsonga" is WRITTEN in English, so detection
+        # correctly says English and the system instruction then reads
+        # "Primary response language: English" — and the model obeys that
+        # header over the request inside the sentence. Measured on
+        # gemini-3.5-flash-lite: "explain gravity in Afrikaans" came back in
+        # English on both attempts. It is not a detection failure; detection
+        # was right. The pipeline was answering a different question from
+        # the one asked.
+        #
+        # Skipped when the caller pinned the language, since an explicit
+        # override is a stronger statement than a phrase in the text.
+        language_was_requested = False
+        if not language_override:
+            requested = named_target_language(user_input)
+            if requested and requested != reply_language:
+                logger.info(
+                    f"Question asks for {requested}; answering in it rather than "
+                    f"{reply_language}."
+                )
+                reply_language = requested
+            language_was_requested = requested is not None
+
         # 3. Knowledge retrieval (verified facts first, then session documents)
         #
         # Uses reply_language, not detection.language. Round 31 added the
@@ -290,6 +330,7 @@ class Orchestrator:
             stage_timings=timings,
             reply_language=reply_language,
             language_was_overridden=language_override is not None,
+            language_was_requested=language_was_requested,
         )
 
         # 7. Speech (optional, and deliberately last)
@@ -313,7 +354,7 @@ class Orchestrator:
         speech_language = self._speech_language(
             result.text,
             fallback=result.reply_language or result.detected_language,
-            was_overridden=result.language_was_overridden,
+            was_overridden=result.language_was_overridden or result.language_was_requested,
         )
         # Which language will actually be spoken, and why — Tiers 1 to 4.
         spoken_language, note = resolve_voice_language(
@@ -331,6 +372,7 @@ class Orchestrator:
             return result
 
         errors: list[str] = []
+        trims: list[str] = []
         speech = synthesize_speech(
             result.text,
             spoken_language,
@@ -339,7 +381,15 @@ class Orchestrator:
             noise_scale=self.tts_noise_scale,
             backend=self.tts_backend,
             on_error=errors.append,
+            max_characters=self.max_speech_characters,
+            on_trim=trims.append,
         )
+        # A shortened reading the listener is told about is a summary; one
+        # they are not told about is the app appearing to lose the end of
+        # its own answer. Appended rather than assigned, so it cannot erase
+        # a substituted-voice note that matters just as much.
+        if trims and speech is not None:
+            result.voice_note = f"{note} {trims[-1]}".strip() if note else trims[-1]
         result.speech_language = spoken_language
         result.speech_error = errors[-1] if errors and speech is None else None
         result.audio = speech.data if speech else None
@@ -351,6 +401,22 @@ class Orchestrator:
     # 0.20 and a marker-word match at 0.75, so this threshold sits between
     # them on purpose.
     SPEECH_LANGUAGE_MIN_CONFIDENCE = 0.5
+
+    # How much of a reply to read when deciding which voice speaks it.
+    #
+    # The whole reply is the wrong sample when the reply QUOTES another
+    # language, which this assistant does constantly — lyrics, a passage
+    # being translated, a term given in both languages. Observed live:
+    # "ni kombela u hlaya national anthem ya shona" was answered in
+    # Xitsonga with the Shona anthem quoted inside it. Over the full text
+    # the detector returned Shona at 85%, so a Xitsonga reply was read
+    # aloud by a Shona voice. Over the opening it returns Xitsonga at 100%.
+    #
+    # The opening is where an assistant speaks in its own voice — the
+    # greeting and the framing sentence — before it quotes anything. That
+    # is the language being SPOKEN, as opposed to the languages appearing
+    # in the reply, and it is the first that the voice should follow.
+    SPEECH_LANGUAGE_SAMPLE_CHARS = 300
 
     def _speech_language(self, text: str, fallback: str, was_overridden: bool = False) -> str:
         """Picks the voice language from the REPLY, not the question.
@@ -366,6 +432,11 @@ class Orchestrator:
         Falls back to the question's language when the detector isn't
         confident, so a weak guess on the reply can't override a solid one
         on the input.
+
+        Only the OPENING of the reply is sampled, because this assistant
+        quotes other languages constantly — lyrics, a passage being
+        translated, a term given in both. See
+        SPEECH_LANGUAGE_SAMPLE_CHARS for the case that showed it.
 
         Known limitation, worth stating rather than hiding: this is only
         as good as the detector. On genuinely code-switched replies (the
@@ -385,7 +456,16 @@ class Orchestrator:
             # on the reply must not quietly overrule them.
             return fallback
 
-        result = self.language_detector.detect(text)
+        # Sampled from the opening rather than the whole reply — see
+        # SPEECH_LANGUAGE_SAMPLE_CHARS. Cut on a space so a word is not
+        # split, which would hand the detector a fragment.
+        sample = text[: self.SPEECH_LANGUAGE_SAMPLE_CHARS]
+        if len(text) > self.SPEECH_LANGUAGE_SAMPLE_CHARS:
+            cut = sample.rfind(" ")
+            if cut > self.SPEECH_LANGUAGE_SAMPLE_CHARS // 2:
+                sample = sample[:cut]
+
+        result = self.language_detector.detect(sample)
         if result.confidence < self.SPEECH_LANGUAGE_MIN_CONFIDENCE:
             return fallback
         if result.language != fallback:
@@ -458,6 +538,14 @@ class Orchestrator:
                 pieces.append(piece)
                 on_chunk(piece)
             return "".join(pieces), "gemini"
+        except GenerationUnavailableError as e:
+            # The provider was busy or rate-limiting, and retrying inside
+            # the client did not clear it. Told apart from a real failure
+            # because the fix is different: this one is "send it again",
+            # and saying "I ran into a problem" instead invites the user to
+            # rewrite a question that was never the problem.
+            logger.warning(f"Generation unavailable after retries: {e}")
+            return generation_busy_message(e.retry_after), "provider_busy"
         except GenerationError as e:
             logger.error(f"Generation failed: {e}")
             return GENERATION_ERROR_MESSAGE, "offline_fallback"

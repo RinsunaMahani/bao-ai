@@ -5,20 +5,23 @@ Run with: streamlit run bao/ui/streamlit_app.py
 """
 
 import inspect
+import os
 
 import psutil
 import streamlit as st
 
 from bao.ai.orchestrator import Orchestrator
-from bao.bootstrap import build_orchestrator
-from bao.core.config import ASSISTANT_LOGO_PATH, Settings
+from bao.bootstrap import build_orchestrator, for_session
+from bao.core.config import ASSISTANT_LOGO_PATH, LABELS, PAN_AFRICAN_LABELS, Settings
 from bao.knowledge.loader import extract_text_from_bytes, has_pdf_support
 from bao.services.language_detector import CompositeLanguageDetector
 from bao.services.speech import (
+    SPEAK_AUTO,
     has_edge_backend,
     has_mms_backend,
     has_stt_backend,
     has_tts_backend,
+    speech_input_language,
     transcribe_audio_bytes,
     tts_availability,
     voice_coverage,
@@ -34,33 +37,138 @@ USER_AVATAR = ":material/person:"
 # of crashing on an unexpected keyword.
 _CHAT_INPUT_HAS_MIC = "accept_audio" in inspect.signature(st.chat_input).parameters
 
+# The logo is decoration, and a missing decoration must not take the page
+# down. When the file was absent - as it was in every Docker image, which
+# excluded docs/ - Streamlit raised MediaFileStorageError on the first load
+# and nothing rendered at all. Each use now falls back when it is missing.
+_LOGO = ASSISTANT_LOGO_PATH if os.path.exists(ASSISTANT_LOGO_PATH) else None
+_FALLBACK_AVATAR = ":material/park:"
+
+
+def resolve_avatar(configured: str) -> str:
+    """The configured avatar, or a built-in icon if it names a file that
+    is not there. Emoji and ":material/...:" icons pass through as given.
+    """
+    looks_like_a_file = os.sep in configured or "/" in configured or "." in configured
+    if looks_like_a_file and not os.path.exists(configured):
+        return _FALLBACK_AVATAR
+    return configured
+
+
 st.set_page_config(
     page_title="Bao AI — Multilingual Assistant",
-    page_icon=ASSISTANT_LOGO_PATH,
+    page_icon=_LOGO or "🌳",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 
 @st.cache_resource
-def init_system():
-    """Builds the pipeline once per session.
+def _shared_pipeline():
+    """Built ONCE for the whole server, and shared by every visitor.
 
-    The pipeline itself comes from bao.bootstrap so the web app and the
-    console cannot drift apart. Only the two presentation-layer pieces the
-    console has no use for are added here.
+    Correct for what it holds: the TFLite classifier, the fitted knowledge
+    base and the API client are identical for everybody and cost seconds
+    to construct, so rebuilding them per session would be waste.
+
+    It must not be used directly — see init_system.
     """
-    settings, orchestrator = build_orchestrator()
+    return build_orchestrator()
+
+
+def init_system():
+    """The pipeline for THIS visitor.
+
+    `@st.cache_resource` caches across all users, sessions and reruns, so
+    handing its object straight to the page shared one conversation memory
+    and one uploaded-document store between everyone connected. A second
+    visitor's question arrived carrying the first visitor's conversation,
+    and a file one person uploaded was retrievable by the next.
+
+    That was invisible from the screen, which is what made it dangerous:
+    `display_messages` is per-session and correct, so each visitor saw
+    only their own chat bubbles while the model received everybody's.
+
+    So the heavy read-only parts stay shared and the mutable ones are
+    per-session, held in session_state rather than rebuilt on each rerun.
+    """
+    settings, shared = _shared_pipeline()
+    if "orchestrator" not in st.session_state:
+        st.session_state.orchestrator = for_session(shared)
+    orchestrator = st.session_state.orchestrator
     return settings, orchestrator, orchestrator.document_retriever
+
+
+REPLY_AUTO = "Detect automatically"
+
+
+def reply_language_options(pan_african_live: bool) -> list[str]:
+    """What the "Reply in" picker offers: automatic, the eleven South
+    African languages, and the fourteen pan-African ones only while that
+    detector is on.
+    """
+    return [REPLY_AUTO, *LABELS, *(PAN_AFRICAN_LABELS if pan_african_live else [])]
+
+
+def reply_override(choice: str | None) -> str | None:
+    """The language_override for Orchestrator.handle, or None to detect."""
+    return None if not choice or choice == REPLY_AUTO else choice
+
+
+# Session keys that describe the conversation so far, as opposed to the
+# visitor's settings (voice on/off, input language, pan-African toggle),
+# which a new conversation should leave alone.
+_CONVERSATION_KEYS = ("display_messages", "last_latency", "last_timings", "last_language")
+
+
+def start_new_conversation(orchestrator: Orchestrator, state=None) -> None:
+    """Forgets the conversation — both what the page shows and what the
+    model is sent — while keeping the visitor's settings and uploads.
+
+    Both halves have to go together. Clearing only the transcript would
+    leave the model still reading the old exchange with nothing on screen
+    to explain why its answers referred to it; clearing only the memory
+    would leave bubbles on screen the model no longer knows about.
+    """
+    state = st.session_state if state is None else state
+    orchestrator.memory.clear()
+    for key in _CONVERSATION_KEYS:
+        if key in state:
+            del state[key]
 
 
 def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
     with st.sidebar:
-        st.image(ASSISTANT_LOGO_PATH, width=120)
+        if _LOGO:
+            st.image(_LOGO, width=120)
         st.title("Bao AI")
         st.caption("Multilingual South African AI Assistant")
         st.caption("Text-first, with optional speech output.")
         st.caption("\"Bao\" — short for baobab: deep roots, offline-first.")
+
+        # There was no way to start over. The last six exchanges are
+        # prepended to every prompt for the rest of the session, so moving
+        # from one topic to the next — or from one demo scenario to the
+        # next — left the model still reading the previous one. Uploaded
+        # documents are deliberately kept: they have their own clear
+        # button, and re-uploading after every new topic would be a chore.
+        #
+        # A callback, not `if st.button(...): ...; st.rerun()`. Callbacks
+        # run BEFORE the rerun, so the whole script then renders normally.
+        # The earlier version called st.rerun() from inside the handler,
+        # which aborted the run before the settings further down the
+        # sidebar were drawn — and Streamlit drops the state of widgets a
+        # run never reaches. So "New conversation" silently switched
+        # "Speak replies" back on and reset "I'll speak in", the exact
+        # settings start_new_conversation promises to keep. Found by
+        # driving the real page with AppTest; a unit test with a plain dict
+        # could not see it.
+        st.button(
+            "New conversation",
+            on_click=start_new_conversation,
+            args=(orchestrator,),
+            width="stretch",
+        )
         st.markdown("---")
 
         st.subheader("System Status")
@@ -72,9 +180,22 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
         st.subheader("Live Telemetry")
         mem = psutil.virtual_memory()
         st.metric("RAM Used", f"{mem.used / (1024**3):.2f} GB", f"{mem.percent}%")
+        timings = st.session_state.get("last_timings") or {}
         if "last_latency" in st.session_state:
-            st.metric("Last Query Latency", f"{st.session_state['last_latency']:.1f} ms")
-        timings = st.session_state.get("last_timings")
+            # "Time to answer", not "latency". latency_ms is measured when
+            # handle() returns, which is when the TEXT is on screen; speech
+            # is synthesized afterwards and its time lands in stage_timings.
+            # Labelling that total "latency" while listing a speech stage
+            # underneath it meant the stages visibly summed to more than the
+            # figure above them, with nothing explaining why.
+            st.metric("Time to answer", f"{st.session_state['last_latency']:.0f} ms")
+            speech_ms = timings.get("speech")
+            if speech_ms:
+                st.metric(
+                    "Voice (after the text)", f"{speech_ms:.0f} ms",
+                    help="Synthesis runs after the answer is already on screen, "
+                         "so it does not delay reading it.",
+                )
         if timings:
             # Which stage was slow, not just that the turn was. Retrieval
             # is sub-millisecond; if a turn felt slow, this says whether
@@ -88,9 +209,12 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
 
         # Runtime toggle rather than a config edit. The composite detector
         # is always constructed when its bundle exists, so flipping this
-        # costs nothing — no pipeline rebuild, no model reload. Mutating a
-        # cached object is safe here because Streamlit serves one session
-        # per process in this deployment.
+        # costs nothing — no pipeline rebuild, no model reload.
+        #
+        # Safe to mutate because `for_session` gave this visitor their own
+        # copy of the composite. It previously mutated the object shared by
+        # every visitor, so one person switching these languages on
+        # switched them on for everybody.
         detector = orchestrator.language_detector
         if isinstance(detector, CompositeLanguageDetector):
             enabled = st.checkbox(
@@ -100,17 +224,20 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
                 help=(
                     "Amharic, French, Hausa, Igbo, Lingala, Luganda, Oromo, "
                     "Nigerian Pidgin, Kirundi, Shona, Somali, Swahili, "
-                    "Tigrinya, Yoruba. Consulted only when the South African "
-                    "classifier is unsure, so the 11 are unaffected. Works on "
-                    "phrases rather than single words."
+                    "Tigrinya, Yoruba. Consulted on every message, but it "
+                    "only takes over when it is confident the text is not a "
+                    "South African language, so the 11 are unaffected. Works "
+                    "on phrases rather than single words."
                 ),
             )
             detector.enabled = enabled
+            pan_african_live = enabled
             if enabled:
                 st.caption("25 languages detected · 11 with curated answers")
             else:
                 st.caption("11 South African languages")
         else:
+            pan_african_live = False
             st.caption("11 South African languages")
             st.caption(
                 "The 14-language model is not loaded — see "
@@ -123,7 +250,43 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
             "isiNdebele, siSwati, Tshivenda, Xitsonga, Sesotho"
         )
 
+        # Lets the visitor overrule detection. It covers the cases detection
+        # cannot get right on its own: "Dumela" is the greeting in Sepedi,
+        # Sesotho AND Setswana, and Luganda is identified correctly but at
+        # too low a confidence to act on. It also lets any supported
+        # language be shown on cue rather than hoped for.
+        #
+        # The options follow what the app can currently detect, so turning
+        # the 14 extra languages off also removes them here. A choice that
+        # is no longer offered falls back to the first option, automatic -
+        # Streamlit does that itself (measured on 1.59.2), and
+        # test_a_choice_that_is_no_longer_offered_falls_back_to_automatic
+        # holds every version CI installs to it.
+        st.selectbox(
+            "Reply in",
+            reply_language_options(pan_african_live),
+            key="reply_in",
+            help=(
+                "Bao detects your language and replies in it. Choose one "
+                "here to always reply in that language instead - useful for "
+                "a greeting shared by several languages, such as 'Dumela'."
+            ),
+        )
+
         st.markdown("---")
+        if has_stt_backend():
+            st.subheader("Voice Input")
+            st.selectbox(
+                "I'll speak in",
+                [SPEAK_AUTO, *LABELS],
+                key="stt_language",
+                help=(
+                    "Speech recognition must know the language before it "
+                    "hears you — it cannot detect it. Typed messages are "
+                    "detected automatically and ignore this."
+                ),
+            )
+
         st.subheader("Speech Output")
         st.checkbox(
             "Speak replies",
@@ -159,17 +322,34 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
         else:
             st.info("Not installed — install `requirements-speech.txt` for spoken replies.")
 
-        coverage = voice_coverage(settings.mms_codes)
-        native = [lang for lang, tier in coverage.items() if tier == "native"]
+        # The twelve pan-African voices are only reachable when their
+        # languages can be detected, so they are reported only when that
+        # detector is on — otherwise the panel would list voices for
+        # languages the app will never identify.
+        covered_languages = LABELS + PAN_AFRICAN_LABELS if pan_african_live else LABELS
+        coverage = voice_coverage(settings.mms_codes, languages=covered_languages)
+        # startswith, not equality: a locally trained checkpoint reports as
+        # "native (locally trained)", which is the BEST tier, not an
+        # approximation. Exact matching excluded it from the count and gave
+        # it the amber "substituted voice" icon.
+        native = [lang for lang, tier in coverage.items() if tier.startswith("native")]
         st.caption(f"Native voices: {len(native)} of {len(coverage)}")
         with st.expander("Voice coverage by language"):
             for language, tier in coverage.items():
-                icon = {"native": "🟢", "text only": "⚪"}.get(tier, "🟡")
+                if tier.startswith("native"):
+                    icon = "🟢"
+                elif tier == "text only":
+                    icon = "⚪"
+                else:
+                    icon = "🟡"
                 st.caption(f"{icon} **{language}** — {tier}")
-            st.caption(
-                "Seven of the eleven have no open text-to-speech model. "
-                "Fallbacks are configurable in config.toml and off by default."
-            )
+            silent = [lang for lang, tier in coverage.items() if tier == "text only"]
+            if silent:
+                st.caption(
+                    f"{len(silent)} of {len(coverage)} have no open text-to-speech "
+                    "model. Fallbacks are configurable in config.toml and off by "
+                    "default."
+                )
 
         if loaded:
             st.caption(f"Voices loaded this session: {len(loaded)}")
@@ -187,18 +367,52 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
         )
         if uploaded_files and st.button("Index Uploaded Documents"):
             with st.spinner("Extracting text & updating index..."):
-                total_chunks, file_count = 0, 0
+                total_chunks, file_count, unreadable = 0, 0, []
                 for file in uploaded_files:
                     text = extract_text_from_bytes(file.getvalue(), file.name)
                     if text.strip():
                         total_chunks += orchestrator.document_retriever.add_document(file.name, text)
                         file_count += 1
+                    else:
+                        # Named rather than counted. "No readable text found"
+                        # across a multi-file upload left the user guessing
+                        # which file failed — usually a scanned PDF, which
+                        # has no text layer to extract at all.
+                        unreadable.append(file.name)
                 if file_count:
                     st.success(f"Indexed {file_count} doc(s) into {total_chunks} chunks.")
-                elif not has_pdf_support():
-                    st.warning("No readable text found. (Install `pypdf` to enable PDF uploads.)")
-                else:
-                    st.warning("No readable text found in uploaded files.")
+                if unreadable:
+                    st.warning(
+                        f"No readable text in: {', '.join(unreadable)}."
+                        + ("" if has_pdf_support() else
+                           " Install `pypdf` to read PDFs.")
+                        + " A scanned PDF is an image and has no text layer."
+                    )
+
+        # What the assistant can currently see, and a way to take it back.
+        # Neither existed: uploads were invisible once indexed and there was
+        # no way to remove them short of restarting, which matters because
+        # they are the user's own files.
+        indexed = orchestrator.document_retriever.sources
+        if indexed:
+            st.caption(
+                f"Indexed this session: {len(indexed)} document(s), "
+                f"{len(orchestrator.document_retriever)} chunks"
+            )
+            with st.expander("Documents Bao can read"):
+                for name in indexed:
+                    st.caption(f"📄 {name}")
+                st.caption(
+                    "Session-scoped and never written to disk. They are "
+                    "gone when you close the tab."
+                )
+            # A callback for the same reason as "New conversation": it runs
+            # before the rerun, so the list above is redrawn empty without
+            # an st.rerun() that could cut the run short.
+            st.button(
+                "Clear uploaded documents",
+                on_click=orchestrator.document_retriever.clear,
+            )
 
 
 def _format_detection_badge(result) -> str:
@@ -211,12 +425,23 @@ def _format_detection_badge(result) -> str:
             f"Language: {result.detected_language} "
             f"(ML model via Keras fallback, {result.confidence * 100:.0f}%)"
         )
+    elif result.detection_backend == "override":
+        # Chosen, not detected - saying "Language: isiZulu" here would
+        # present the visitor's own choice as the detector's finding.
+        detection_part = f"Replying in {result.detected_language} (chosen in the sidebar)"
     else:
         detection_part = f"Language: {result.detected_language}"
-    # When detection was too weak to act on, say so. Otherwise the badge
-    # claims a language the reply was not actually written in.
+    # When the reply is in a different language from the one detected, say
+    # WHY — there are now two reasons, and they mean opposite things.
+    # This was written when a weak detection was the only one, so asking
+    # "explain calculus in xitsonga" (English at 83%) produced a badge
+    # claiming 83% was "too unsure to use": false, and exactly the kind of
+    # line an examiner reads as the detector being broken.
     if result.reply_language and result.reply_language != result.detected_language:
-        detection_part += f" — too unsure to use, replying in {result.reply_language}"
+        if result.language_was_requested:
+            detection_part += f" — you asked for {result.reply_language}"
+        else:
+            detection_part += f" — too unsure to use, replying in {result.reply_language}"
     badge = f"{detection_part} · source: {result.source}"
     # Cross-lingual turns ("explain X in Xitsonga") answer in a different
     # language from the question. Showing it makes a wrong voice obvious.
@@ -240,15 +465,26 @@ def _transcribe(settings: Settings, audio_file) -> str | None:
     warning. Shared by the in-chat microphone and the legacy recorder so
     both paths behave identically.
     """
+    language = speech_input_language(
+        st.session_state.get("stt_language"),
+        st.session_state.get("last_language", "English"),
+        settings.stt_codes,
+    )
     try:
         text = transcribe_audio_bytes(
             audio_file.getvalue() if hasattr(audio_file, "getvalue") else audio_file.read(),
-            st.session_state.get("last_language", "English"),
+            language,
             settings.stt_codes,
         )
         return text or None
     except Exception as e:
-        st.warning(f"Could not transcribe audio: {e}")
+        # Says which language it listened for, and how to change it. "Could
+        # not understand the audio" alone reads as a microphone fault when
+        # the usual cause is the recogniser expecting a different language.
+        st.warning(
+            f"Could not understand that as {language} ({e}). If you spoke "
+            "another language, choose it under “I'll speak in” in the sidebar."
+        )
         return None
 
 
@@ -267,7 +503,10 @@ def render_legacy_voice_input(settings: Settings, orchestrator: Orchestrator) ->
             if transcription:
                 st.write(f"Transcribed: **{transcription}**")
                 if st.button("Send voice transcription"):
-                    _handle_turn(settings, orchestrator, transcription, display_prefix="[Voice] ")
+                    _handle_turn(
+                        settings, orchestrator, transcription, display_prefix="[Voice] ",
+                        language_override=reply_override(st.session_state.get("reply_in")),
+                    )
 
 
 def _handle_turn(
@@ -281,7 +520,7 @@ def _handle_turn(
     with st.chat_message("user", avatar=USER_AVATAR):
         st.markdown(display_prefix + user_input)
 
-    with st.chat_message("assistant", avatar=settings.assistant_avatar):
+    with st.chat_message("assistant", avatar=resolve_avatar(settings.assistant_avatar)):
         placeholder = st.empty()
         placeholder.markdown(thinking_indicator_html(), unsafe_allow_html=True)
 
@@ -307,8 +546,15 @@ def _handle_turn(
 
         placeholder.empty()
 
+        # Drawn into a placeholder and rewritten after speech, because half
+        # of what the badge reports is not known until then: `speak()` is
+        # what sets `speech_language`, so a badge rendered once — before it
+        # ran — silently dropped the "voice: ..." suffix that exists to make
+        # a cross-lingual voice visible. That suffix has been dead since
+        # synthesis moved out of the blocking path.
+        badge_slot = st.empty()
         badge = _format_detection_badge(result)
-        st.caption(badge)
+        badge_slot.caption(badge)
         st.markdown(result.text)
 
         # Text is on screen and the turn is usable from here on. Speech is
@@ -316,6 +562,8 @@ def _handle_turn(
         if st.session_state.get("speech_enabled", True):
             with st.spinner("Generating voice..."):
                 orchestrator.speak(result)
+            badge = _format_detection_badge(result)
+            badge_slot.caption(badge)
             if result.audio:
                 st.audio(result.audio, format=result.audio_mime)
                 if result.voice_note:
@@ -387,12 +635,15 @@ def main() -> None:
     render_legacy_voice_input(settings, orchestrator)
 
     for msg in st.session_state.display_messages:
-        render_message(msg, assistant_avatar=settings.assistant_avatar)
+        render_message(msg, assistant_avatar=resolve_avatar(settings.assistant_avatar))
 
     submitted = render_chat_input(settings)
     if submitted:
         user_input, prefix = submitted
-        _handle_turn(settings, orchestrator, user_input, display_prefix=prefix)
+        _handle_turn(
+            settings, orchestrator, user_input, display_prefix=prefix,
+            language_override=reply_override(st.session_state.get("reply_in")),
+        )
 
 
 if __name__ == "__main__":

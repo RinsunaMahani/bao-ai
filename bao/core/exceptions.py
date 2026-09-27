@@ -34,6 +34,28 @@ class GenerationError(BaoError):
     """
 
 
+class GenerationUnavailableError(GenerationError):
+    """Raised when generation failed for a reason that is the provider's
+    and is expected to pass: the model is overloaded (503), the request was
+    rate-limited (429), or the network dropped — and retrying did not clear
+    it within the configured attempts.
+
+    A subclass rather than a flag because callers treat it differently. An
+    ordinary GenerationError means something about the request was wrong
+    and repeating it will not help; this one means the request was fine and
+    the user should simply try again, which is a different sentence to put
+    on screen.
+
+    `retry_after` carries the provider's own estimate in seconds when it
+    gave one, so the interface can say "try again in 13 seconds" instead of
+    "try again in a moment" and be right.
+    """
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 class SpeechError(BaoError):
     """Raised when text-to-speech or speech-to-text processing fails."""
 

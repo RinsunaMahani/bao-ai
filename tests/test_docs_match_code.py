@@ -19,6 +19,12 @@ from bao.core.config import LABELS, Settings
 REPO = Path(__file__).resolve().parent.parent
 DOCS = [REPO / "README.md", *(REPO / "docs").glob("*.md")]
 
+# Every read below passes encoding="utf-8" explicitly. Path.read_text()
+# defaults to the platform encoding, which is cp1252 on Windows, so these
+# checks crashed with UnicodeDecodeError the moment a document quoted the
+# orthography it is documenting — Tshivenda's ṱ ḓ ṋ ḽ or Sepedi's š. A
+# guard on a multilingual project's docs cannot assume Latin-1.
+
 
 @pytest.fixture(scope="module")
 def knowledge_rows():
@@ -74,7 +80,7 @@ def test_no_document_states_a_stale_row_count(knowledge_rows):
     for doc in DOCS:
         if not doc.exists():
             continue
-        for line in doc.read_text().splitlines():
+        for line in doc.read_text(encoding="utf-8").splitlines():
             for match in explicit.finditer(line):
                 # One group per alternation branch; exactly one is set.
                 digits = next(g for g in match.groups() if g is not None)
@@ -89,7 +95,7 @@ def test_language_count_is_consistent_everywhere():
     for doc in DOCS:
         if not doc.exists():
             continue
-        text = doc.read_text()
+        text = doc.read_text(encoding="utf-8")
         wrong = re.findall(r"\b(\d+)\s+official (?:South African )?languages", text)
         for n in wrong:
             assert int(n) in (11, 12), (
@@ -102,7 +108,7 @@ def test_every_command_the_readme_gives_actually_exists():
     """A README that tells a marker to run a file that isn't there costs
     documentation marks for no reason.
     """
-    readme = (REPO / "README.md").read_text()
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
     scripts = set(re.findall(r"python (\S+\.py)", readme))
     scripts |= set(re.findall(r"streamlit run (\S+\.py)", readme))
     missing = [s for s in scripts if not (REPO / s).exists()]

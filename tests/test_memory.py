@@ -34,3 +34,47 @@ def test_clear_resets_memory():
     memory.add("user", "hello")
     memory.clear()
     assert len(memory) == 0
+
+
+def test_one_long_reply_does_not_bloat_every_later_prompt():
+    """The window bounded how MANY turns were carried and nothing bounded
+    how LARGE each was - and it is the size that grows.
+
+    The security guardrail caps user input at 500 characters, but a
+    generated reply is uncapped; a measured one ran to 2,059. Six such
+    exchanges prepended 12,656 characters, roughly 3,200 tokens, to every
+    subsequent request - paid again on each turn against a small free-tier
+    allowance, and delaying the first word, which is the part an audience
+    watches.
+    """
+    memory = ConversationMemory()
+    for _ in range(6):
+        memory.add("user", "explain calculus in xitsonga")
+        memory.add("assistant", "A" * 2059)
+
+    context = memory.as_context()
+    assert len(context) < 6000, f"context is {len(context)} chars"
+
+
+def test_the_cut_is_visible_to_the_model():
+    """A truncated turn must not read as a complete previous answer."""
+    memory = ConversationMemory()
+    memory.add("assistant", "A" * 2000)
+    assert memory.turns[0].content.endswith("[…]")
+
+
+def test_short_turns_are_kept_whole():
+    """Most exchanges are well under the cap and must be untouched -
+    resolving "and in Afrikaans?" depends on reading them exactly.
+    """
+    memory = ConversationMemory()
+    memory.add("user", "Avuxeni")
+    memory.add("assistant", "Avuxeni! Ndzi nga ku pfuna njhani?")
+    assert memory.turns[0].content == "Avuxeni"
+    assert memory.turns[1].content == "Avuxeni! Ndzi nga ku pfuna njhani?"
+
+
+def test_the_per_turn_cap_can_be_switched_off():
+    memory = ConversationMemory(max_chars_per_turn=0)
+    memory.add("assistant", "A" * 2000)
+    assert len(memory.turns[0].content) == 2000

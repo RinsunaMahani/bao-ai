@@ -214,7 +214,7 @@ def test_apostrophes_still_survive_the_wider_cleaner():
     assert "ematshan'weni" in speech_module.clean_text_for_speech("**ematshan'weni**")
 
 
-def test_local_checkpoint_unlocks_sepedi_and_the_sotho_tswana_routes(tmp_path):
+def test_local_checkpoint_unlocks_sepedi_and_the_sotho_tswana_routes(tmp_path, monkeypatch):
     """One locally trained checkpoint changes the tier of THREE languages.
 
     Sotho-Tswana substitution was originally dropped outright because
@@ -230,6 +230,16 @@ def test_local_checkpoint_unlocks_sepedi_and_the_sotho_tswana_routes(tmp_path):
     voice promises audio that never arrives.
     """
     from bao.services import speech
+
+    # A local checkpoint is a VITS model, so it needs the same
+    # torch/transformers stack MMS does. Pinned rather than left to this
+    # machine's installed packages: CI installs no speech extras, and a
+    # test whose result depends on that is testing the runner, not the
+    # policy. (Before coverage was derived from the resolver, this test
+    # passed in CI precisely BECAUSE coverage ignored the backend — it was
+    # asserting a claim the audio path could not honour.)
+    monkeypatch.setattr(speech, "_HAS_MMS_BACKEND", True)
+    monkeypatch.setattr(speech, "_HAS_EDGE_BACKEND", True)
 
     original = dict(speech.LOCAL_VOICE_MODELS)
     try:
@@ -270,3 +280,118 @@ def test_a_configured_but_missing_checkpoint_is_ignored(tmp_path):
         assert "Sesotho" not in speech.related_language_voices()
     finally:
         speech.load_local_voices(original)
+
+
+# --- how much of a reply actually gets spoken ---------------------------
+
+
+def test_a_long_reply_is_not_read_out_in_full():
+    """Nothing capped this, and the cost is invisible from the text.
+
+    MMS runs a VITS forward pass per sentence on CPU, so a detailed answer
+    measured here produced 4.7 MB of WAV - two and a half minutes of audio
+    - and took 60 seconds to synthesize, while the text had been on screen
+    and readable the whole time.
+    """
+    from bao.services.speech import trim_for_speech
+
+    long_answer = "This is a sentence about calculus. " * 40
+    spoken, trimmed = trim_for_speech(long_answer, 400)
+    assert trimmed
+    assert len(spoken) <= 400
+
+
+def test_the_cut_lands_on_a_sentence_boundary():
+    """A clip that stops mid-word sounds like a fault rather than a
+    summary.
+    """
+    from bao.services.speech import trim_for_speech
+
+    spoken, _ = trim_for_speech("One. Two. Three. " * 40, 400)
+    assert spoken.endswith("."), spoken[-30:]
+
+
+def test_a_reply_shorter_than_the_cap_is_untouched():
+    from bao.services.speech import trim_for_speech
+
+    assert trim_for_speech("Avuxeni, hi njhani?", 400) == ("Avuxeni, hi njhani?", False)
+
+
+def test_text_with_no_sentence_or_word_breaks_still_gets_cut():
+    """Degenerate input must not defeat the cap - the point is bounding
+    synthesis time, and an unbroken string is the worst case for it.
+    """
+    from bao.services.speech import trim_for_speech
+
+    spoken, trimmed = trim_for_speech("x" * 900, 400)
+    assert trimmed and len(spoken) == 400
+
+
+def test_the_cap_can_be_switched_off():
+    from bao.services.speech import trim_for_speech
+
+    long_answer = "One. Two. " * 100
+    assert trim_for_speech(long_answer, 0) == (long_answer, False)
+
+
+def test_trimming_is_disclosed_to_the_caller(monkeypatch):
+    """A shortened reading the listener is told about is a summary; one
+    they are not told about is the app appearing to lose the end of its own
+    answer.
+    """
+    monkeypatch.setattr(speech_module, "_HAS_EDGE_BACKEND", False)
+    monkeypatch.setattr(speech_module, "_HAS_MMS_BACKEND", False)
+
+    notes = []
+    speech_module.synthesize_speech(
+        "This is a sentence about calculus. " * 40, "English",
+        max_characters=400, on_trim=notes.append,
+    )
+    assert notes and "full text" in notes[0]
+
+
+def test_replies_are_read_in_full_by_default():
+    """The voice is not a flourish on top of text someone has already
+    read. For a user who cannot easily read the screen it IS the answer,
+    and half an answer is not an answer — an emergency number cut off
+    before the number is worse than no audio at all.
+    """
+    from bao.core.config import Settings
+    from bao.services.speech import DEFAULT_MAX_SPEECH_CHARACTERS, trim_for_speech
+
+    assert DEFAULT_MAX_SPEECH_CHARACTERS == 0
+    long_answer = "The ambulance number is 10177. " * 60
+    assert trim_for_speech(long_answer, DEFAULT_MAX_SPEECH_CHARACTERS) == (long_answer, False)
+    assert Settings(".absent.toml").max_speech_characters == 0
+
+
+# --- which language the microphone listens for ----------------------------
+
+
+def test_the_speaker_can_choose_the_recognition_language():
+    """Speech recognition must be told the language before it hears
+    anything. It used to be the previous turn's language only, so the
+    first spoken message was always recognised as English.
+
+    Measured with clear synthesized speech: isiZulu and Afrikaans both
+    failed outright as en-ZA and came back near-perfect as zu-ZA and af-ZA.
+    The recogniser was fine; it was being told the wrong language.
+    """
+    from bao.core.config import DEFAULT_STT_CODES
+    from bao.services.speech import SPEAK_AUTO, speech_input_language
+
+    assert speech_input_language("isiZulu", "English", DEFAULT_STT_CODES) == "isiZulu"
+    assert speech_input_language(SPEAK_AUTO, "Afrikaans", DEFAULT_STT_CODES) == "Afrikaans"
+    assert speech_input_language(None, "Sepedi", DEFAULT_STT_CODES) == "Sepedi"
+
+
+def test_a_language_with_no_recogniser_locale_falls_back_to_english():
+    """A pan-African language detected on the previous turn has no locale
+    in the recogniser table. Falling back to English is a known quantity;
+    an arbitrary code is not.
+    """
+    from bao.core.config import DEFAULT_STT_CODES
+    from bao.services.speech import SPEAK_AUTO, speech_input_language
+
+    assert speech_input_language(SPEAK_AUTO, "Swahili", DEFAULT_STT_CODES) == "English"
+    assert speech_input_language(SPEAK_AUTO, None, DEFAULT_STT_CODES) == "English"

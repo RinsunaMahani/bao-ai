@@ -12,14 +12,17 @@ already is, and — more importantly — leaves open the objection that the
 weak paraphrase recall is just a badly chosen constant. Sweeping both
 closes that objection with evidence either way.
 
-MEASURED RESULT on the 70-query set with TF-IDF and 38 KB rows: F1 sits
-between 0.64 and 0.73 across all 18 combinations, and the shipped
-configuration (coverage 0.7, threshold 0.25) is already the global best.
-The two gates trade against each other almost perfectly — every setting
-that recovers paraphrase recall gives back an equal amount of negative
-rejection. That is the evidence that further tuning of TF-IDF is
-exhausted, and therefore that closing the paraphrase gap requires a
-different REPRESENTATION rather than a different constant.
+MEASURED RESULT on the 70-query set with TF-IDF and 38 KB rows, re-run
+2026-09-27: F1 sits between 0.687 and 0.821 across all 24 combinations.
+The best is coverage 0.7 at threshold 0.15 (F1 0.821); the shipped
+threshold 0.25 scores 0.800. The difference is ONE paraphrase query, on
+the set the thresholds were chosen on, so the default was left alone - an
+earlier version of this note called 0.25 the global best, which was true
+of the knowledge base at the time and is not now. The two gates trade
+against each other: every setting that recovers paraphrase recall gives
+back negative rejection. That is the evidence that further tuning of
+TF-IDF is exhausted, and therefore that closing the paraphrase gap
+requires a different REPRESENTATION rather than a different constant.
 
 WHY IT MATTERS FOR THE SEMANTIC UPGRADE. The coverage gate is a
 TF-IDF-specific remedy: it exists because a TF-IDF vectorizer silently

@@ -39,11 +39,10 @@ import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import scipy.io.wavfile
-
-from pathlib import Path
 
 from bao.core.config import DEFAULT_MMS_CODES, DEFAULT_STT_CODES
 from bao.core.exceptions import SpeechError
@@ -73,6 +72,15 @@ except ImportError:
     edge_tts = None  # type: ignore[assignment]
     _HAS_EDGE_BACKEND = False
 
+try:
+    # The maintained fork. The original `TTS` package caps at Python <3.12;
+    # `coqui-tts` supports 3.10-3.14 and installs the same import name.
+    from TTS.utils.synthesizer import Synthesizer as _CoquiSynthesizer
+    _HAS_COQUI_BACKEND = True
+except Exception:  # pragma: no cover - heavy optional dep, many failure modes
+    _CoquiSynthesizer = None  # type: ignore[assignment]
+    _HAS_COQUI_BACKEND = False
+
 logger = get_logger(__name__)
 
 WAV_MIME = "audio/wav"
@@ -83,10 +91,103 @@ MP3_MIME = "audio/mpeg"
 # edge-tts voice list (2026-08-25) rather than assumed — a wrong ID fails
 # at request time with an unhelpful error.
 _EDGE_VOICES = {
+    # South African locales — the only three of the eleven Microsoft has.
     "English": "en-ZA-LukeNeural",
     "Afrikaans": "af-ZA-WillemNeural",
     "isiZulu": "zu-ZA-ThembaNeural",
+    # Pan-African locales. Of the fourteen languages the optional detector
+    # adds, these four are the only ones with a Microsoft neural voice —
+    # confirmed by reading the published voice list on 2026-09-18 (322
+    # voices, 11 relevant locales), not by assuming a locale exists because
+    # the language is widely spoken. The other ten fall through to MMS.
+    #
+    # Swahili resolves to the Kenyan locale rather than Tanzanian; both
+    # exist and neither is more correct for an app that does not ask which.
+    "Amharic": "am-ET-MekdesNeural",
+    "French": "fr-FR-HenriNeural",
+    "Somali": "so-SO-UbaxNeural",
+    "Swahili": "sw-KE-ZuriNeural",
 }
+
+# --- Coqui multilingual South African VITS ------------------------------
+#
+# The only model found that covers all eleven South African languages. It
+# closes the exact gap edge-tts and MMS leave: seven languages with no
+# voice anywhere.
+#
+# THREE THINGS TO KNOW BEFORE ENABLING IT, none of which are defects but
+# all of which are the user's to weigh:
+#
+#  1. LICENCE. cc-by-nc-4.0 — non-commercial. This repository is MIT, so
+#     the model is downloaded at runtime and never vendored; enabling it
+#     makes the resulting *deployment* non-commercial. That is fine for an
+#     academic project and not fine for a product, which is why this is
+#     opt-in rather than a default.
+#  2. GATED. `gated: auto` on Hugging Face, so access is granted
+#     immediately on accepting the terms at the model page — but it must
+#     be accepted once, with HF_TOKEN set, or every fetch returns 403.
+#  3. UNVERIFIED. Its model card is an unfilled template: no training
+#     details, no evaluation, no author. Nothing here can tell you how it
+#     sounds. Listen to it before demoing it.
+#
+# Codes are the repo's own language ids, taken from its declared language
+# tags. If the model is retrained with different ids, synthesis fails with
+# a clear message rather than silently picking the wrong voice — see
+# _synthesize_coqui.
+COQUI_SA_REPO = "guymandude/South-African-TTS-11-Vits"
+
+# Which of the model's 130 speakers to use. Set from config.toml via
+# set_coqui_speaker(). Falls back to the first in sorted order when unset
+# or unknown, so a typo degrades to a working voice rather than an error
+# raised deep inside Coqui.
+COQUI_SA_SPEAKER: str | None = None
+
+
+def set_coqui_speaker(name: str | None) -> None:
+    """Chooses the speaker voice. There is no way to derive a good choice:
+    the ids are anonymous and carry no language, so this is picked by ear.
+    """
+    global COQUI_SA_SPEAKER
+    COQUI_SA_SPEAKER = name or None
+COQUI_SA_LANGUAGES = {
+    "Afrikaans": "afr", "English": "eng", "isiNdebele": "nbl", "Sepedi": "nso",
+    "Sesotho": "sot", "siSwati": "ssw", "Setswana": "tsn", "Xitsonga": "tso",
+    "Tshivenda": "ven", "isiXhosa": "xho", "isiZulu": "zul",
+}
+
+# Off unless config.toml turns it on, for reasons 1-3 above. Set by
+# bootstrap from Settings.coqui_sa_enabled, the same way local voices are
+# registered, so nothing here reads config directly.
+_COQUI_ENABLED = False
+
+
+def enable_coqui_sa(enabled: bool) -> bool:
+    """Turns the multilingual South African VITS model on or off.
+
+    Returns what it actually ended up as: asking for it without
+    `coqui-tts` installed leaves it off rather than promising a voice that
+    cannot load.
+    """
+    global _COQUI_ENABLED
+    _COQUI_ENABLED = bool(enabled) and _HAS_COQUI_BACKEND
+    if enabled and not _HAS_COQUI_BACKEND:
+        logger.warning(
+            "enable_coqui_sa is set but coqui-tts is not installed — the seven "
+            "languages it would cover stay text-only. pip install coqui-tts"
+        )
+    elif _COQUI_ENABLED:
+        logger.info(f"Coqui South African VITS enabled ({COQUI_SA_REPO}).")
+    return _COQUI_ENABLED
+
+
+def has_coqui_backend() -> bool:
+    """True when the Coqui model is installed AND switched on."""
+    return _HAS_COQUI_BACKEND and _COQUI_ENABLED
+
+
+def _coqui_speaks(language: str) -> bool:
+    return has_coqui_backend() and language in COQUI_SA_LANGUAGES
+
 
 # VITS degrades on long inputs (attention alignment drifts and memory
 # grows with sequence length), so MMS input is chunked. Chunks longer than
@@ -237,34 +338,70 @@ def related_language_voices() -> dict[str, str]:
 RELATED_LANGUAGE_VOICES = _NGUNI_ROUTES
 
 
-def voice_coverage(mms_codes: dict[str, str] | None = None) -> dict[str, str]:
+def voice_coverage(
+    mms_codes: dict[str, str] | None = None,
+    languages: list[str] | None = None,
+) -> dict[str, str]:
     """Which tier each language currently falls into, for display.
 
     Reports capability, not attempts: it does not download anything, so it
     is safe to call on every render.
+
+    Derived by ASKING resolve_voice_language, not by re-deriving the tiers
+    from the same tables a second time. The two used to be independent
+    walks over overlapping data, and they drifted: this function consulted
+    LOCAL_VOICE_MODELS and related_language_voices() while the resolver
+    consulted neither. Registering a locally trained Sepedi checkpoint
+    therefore made the sidebar report "Sepedi — native (locally trained)"
+    and "Sesotho — related (Sepedi)" while speak() returned no audio for
+    either, which is the worst version of this bug: the interface made a
+    claim about coverage that the audio path could not honour.
+
+    A tier reported here is now one synthesis will honour, by
+    construction rather than by agreement.
     """
     from bao.core.config import LABELS
 
+    # Defaults to the eleven South African languages. The caller passes a
+    # wider list when the pan-African detector is on, because those twelve
+    # extra voices are only reachable when their languages can be detected
+    # in the first place — reporting coverage for a language the app will
+    # never identify would be noise.
     coverage = {}
-    routes = related_language_voices()
-    for language in LABELS:
-        if language in LOCAL_VOICE_MODELS:
-            coverage[language] = "native (locally trained)"
-        elif _HAS_EDGE_BACKEND and language in _EDGE_VOICES:
-            coverage[language] = "native"
-        elif _HAS_MMS_BACKEND and (mms_codes or DEFAULT_MMS_CODES).get(language) in _KNOWN_MMS_VOICES:
-            coverage[language] = "native"
-        elif language in routes:
-            coverage[language] = f"related ({routes[language]})"
-        else:
-            coverage[language] = "text only"
+    for language in languages or LABELS:
+        # Fallbacks off — anything returned is a voice for the language itself.
+        spoken, _ = resolve_voice_language(language, mms_codes)
+        if spoken is not None:
+            if language in LOCAL_VOICE_MODELS:
+                coverage[language] = "native (locally trained)"
+            elif select_backend(language, "auto") == "coqui":
+                coverage[language] = "native (SA VITS)"
+            else:
+                coverage[language] = "native"
+            continue
+        # Fallbacks on — what someone who opts in would actually hear.
+        spoken, _ = resolve_voice_language(language, mms_codes, allow_related=True)
+        coverage[language] = f"related ({spoken})" if spoken else "text only"
     return coverage
 
 
-# Verified against Hugging Face on 2026-08-30 with an authenticated request.
-# Everything else in DEFAULT_MMS_CODES returned 404. Listed explicitly so
-# coverage can be reported without a network call.
-_KNOWN_MMS_VOICES = {"tso", "eng"}
+# Codes with a real facebook/mms-tts-<code> repo, verified against Hugging
+# Face with an authenticated request rather than inferred from the language
+# being widely spoken. Listed explicitly so coverage can be reported
+# without a network call.
+#
+# South African (probed 2026-08-30): only tso and eng resolve. xho, sot,
+# tsn, nso, ven, ssw, nbl and afr all 404 — MMS covers ~1100 languages but
+# not those.
+#
+# Pan-African (probed 2026-09-18): twelve of the fourteen resolve, which is
+# a far better hit rate and the reason those languages go from silent to
+# spoken without a new dependency. ibo and lin 404 under every code tried,
+# so Igbo and Lingala stay text-only and say so.
+_KNOWN_MMS_VOICES = {
+    "tso", "eng",
+    "amh", "fra", "hau", "lug", "orm", "pcm", "run", "sna", "som", "swh", "tir", "yor",
+}
 
 
 def select_backend(target_language: str, preference: str = "auto") -> str | None:
@@ -279,6 +416,9 @@ def select_backend(target_language: str, preference: str = "auto") -> str | None
     back to MMS; "edge" and "mms" force one backend and return None rather
     than silently using the other.
     """
+    if preference == "coqui":
+        return "coqui" if _coqui_speaks(target_language) else None
+
     if preference == "mms":
         return "mms" if _HAS_MMS_BACKEND else None
 
@@ -288,11 +428,36 @@ def select_backend(target_language: str, preference: str = "auto") -> str | None
     # "auto" — Tier 1 only. Tiers 2 and 3 are applied by the caller via
     # resolve_voice_language(), because they change WHICH language is
     # spoken, not which backend speaks it, and that has to be visible.
+    #
+    # A checkpoint trained on this language specifically outranks a generic
+    # voice, so it is checked before edge — otherwise training an isiZulu
+    # model and registering it would change nothing, because edge already
+    # claims isiZulu. Local checkpoints are VITS, so they run on the same
+    # engine as MMS and report as "mms"; the backend is the same, only the
+    # weights differ.
+    if _HAS_MMS_BACKEND and target_language in LOCAL_VOICE_MODELS:
+        return "mms"
     if _HAS_EDGE_BACKEND and target_language in _EDGE_VOICES:
         return "edge"
+    # Before the generic MMS fall-through but after edge: the Coqui model
+    # is a real voice for the language, where falling through to MMS means
+    # whatever code the table happens to hold. It does NOT outrank edge —
+    # Microsoft's neural voices are better than a community NCHLT model for
+    # the three languages both cover, and this model's job is the seven
+    # neither covers.
+    if _coqui_speaks(target_language) and not _has_native_mms(target_language, None):
+        return "coqui"
     if _HAS_MMS_BACKEND:
         return "mms"
     return None
+
+
+def _has_native_mms(target_language: str, mms_codes: dict[str, str] | None) -> bool:
+    """True when MMS has a verified voice for this language specifically,
+    as opposed to the "eng" default `synthesize_speech` falls back to.
+    """
+    codes = mms_codes or DEFAULT_MMS_CODES
+    return _HAS_MMS_BACKEND and codes.get(target_language) in _KNOWN_MMS_VOICES
 
 
 def resolve_voice_language(
@@ -313,15 +478,34 @@ def resolve_voice_language(
     """
     codes = mms_codes or DEFAULT_MMS_CODES
 
-    # Tier 1 — a real voice for this language.
+    # Tier 1 — a real voice for this language. A locally trained checkpoint
+    # comes first: it was trained on this language rather than merely
+    # covering it. Gated on the MMS backend because a local checkpoint is a
+    # VITS model and needs the same torch/transformers stack to run —
+    # promising a voice that cannot be loaded is the failure this whole
+    # tier system exists to avoid.
+    if _HAS_MMS_BACKEND and target_language in LOCAL_VOICE_MODELS:
+        return target_language, None
     if _HAS_EDGE_BACKEND and target_language in _EDGE_VOICES:
         return target_language, None
     if _HAS_MMS_BACKEND and codes.get(target_language) in _KNOWN_MMS_VOICES:
         return target_language, None
+    # Still Tier 1: a voice in the language the user is actually reading,
+    # which is the whole point of the tier. This is what turns the related-
+    # language substitution below from the first fallback into a last
+    # resort — borrowing isiZulu for isiXhosa is only ever an approximation,
+    # and an isiXhosa voice beats it whenever one exists.
+    if _coqui_speaks(target_language):
+        return target_language, None
 
-    # Tier 2 — a closely-related language, opt-in.
-    if allow_related and target_language in RELATED_LANGUAGE_VOICES:
-        related = RELATED_LANGUAGE_VOICES[target_language]
+    # Tier 2 — a closely-related language, opt-in. Read from the FUNCTION,
+    # not the static table: the Sotho-Tswana routes exist only while a
+    # Sepedi checkpoint is registered, and the static table never carried
+    # them. Using it here is what made those routes unreachable no matter
+    # what was installed.
+    routes = related_language_voices()
+    if allow_related and target_language in routes:
+        related = routes[target_language]
         speakable, _ = resolve_voice_language(related, codes)
         if speakable:
             return speakable, (
@@ -337,6 +521,49 @@ def resolve_voice_language(
 
     # Tier 4.
     return None, f"No voice is available for {target_language}; showing text only."
+
+
+# How much of a reply to speak. 0 = all of it, which is the default.
+#
+# This was capped at 400 characters to keep synthesis quick, and that was
+# the wrong trade for this app. The voice is not a flourish on top of text
+# someone has already read — for a user who cannot easily read the screen
+# it IS the answer, and half an answer is not an answer. An emergency
+# number cut off before the number is worse than no audio at all.
+#
+# The cost is real and worth stating: MMS runs a VITS forward pass per
+# sentence on CPU, so a long reply takes roughly 60 seconds to synthesize
+# and produces two and a half minutes of audio. Synthesis runs AFTER the
+# text is on screen, so it delays nothing anyone is reading.
+#
+# Set a character count here to cap it again — the cut lands on a sentence
+# boundary and the interface says it happened.
+DEFAULT_MAX_SPEECH_CHARACTERS = 0
+
+NEWLINE = chr(10)  # spelled this way so the cut logic below stays escape-free
+
+
+def trim_for_speech(text: str, max_characters: int) -> tuple[str, bool]:
+    """Returns (text_to_speak, was_trimmed), cutting on a sentence
+    boundary where one exists and on a word boundary otherwise.
+    """
+    if max_characters <= 0 or len(text) <= max_characters:
+        return text, False
+
+    window = text[:max_characters]
+    # Prefer the last sentence end; fall back to the last space so a word
+    # is never cut in half.
+    sentence_end = max(window.rfind(". "), window.rfind("! "),
+                       window.rfind("? "), window.rfind("." + NEWLINE),
+                       window.rfind(NEWLINE))
+    cut = sentence_end
+    if cut < max_characters // 3:
+        cut = window.rfind(" ")
+    if cut <= 0:
+        cut = max_characters
+    else:
+        cut += 1
+    return text[:cut].strip(), True
 
 
 def _normalize_waveform(waveform: np.ndarray) -> np.ndarray:
@@ -430,31 +657,42 @@ _TTS_MODELS: dict[str, tuple] = {}
 _TTS_FAILURES: dict[str, str] = {}
 
 
-def load_tts_model(mms_code: str):
-    """Loads (and memoizes) an MMS voice. Raises on failure, but only the
+def load_tts_model(mms_code: str, local_path: str | None = None):
+    """Loads (and memoizes) a VITS voice. Raises on failure, but only the
     first attempt actually tries — subsequent calls re-raise the recorded
     reason immediately.
+
+    `local_path` points at a checkpoint this project trained itself. A
+    local directory and a Hugging Face repo id are interchangeable to
+    `from_pretrained`, so a locally trained voice needs no separate
+    synthesis path — only a different source. That is the whole reason
+    the feature is a few lines rather than a second backend.
+
+    The cache is keyed on the SOURCE, not the language code, so a local
+    checkpoint and the pretrained repo for the same code can coexist and
+    a failure against one is never remembered against the other.
     """
-    if mms_code in _TTS_MODELS:
-        return _TTS_MODELS[mms_code]
-    if mms_code in _TTS_FAILURES:
-        raise SpeechError(_TTS_FAILURES[mms_code])
+    key = local_path or mms_code
+    if key in _TTS_MODELS:
+        return _TTS_MODELS[key]
+    if key in _TTS_FAILURES:
+        raise SpeechError(_TTS_FAILURES[key])
 
     if not _HAS_MMS_BACKEND:
-        raise ImportError("torch and transformers are required for MMS speech synthesis.")
+        raise ImportError("torch and transformers are required for VITS speech synthesis.")
 
-    model_name = f"facebook/mms-tts-{mms_code}"
+    source = local_path or f"facebook/mms-tts-{mms_code}"
     try:
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model = VitsModel.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(source)
+        model = VitsModel.from_pretrained(source)
         model.eval()
     except Exception as e:
         # Remembered so it is attempted once per process, not once per turn.
-        _TTS_FAILURES[mms_code] = f"{model_name} could not be loaded: {e}"
+        _TTS_FAILURES[key] = f"{source} could not be loaded: {e}"
         raise
 
-    _TTS_MODELS[mms_code] = (tokenizer, model)
-    logger.info(f"Loaded MMS-TTS model for language code '{mms_code}'")
+    _TTS_MODELS[key] = (tokenizer, model)
+    logger.info(f"Loaded VITS voice from '{source}'.")
     return tokenizer, model
 
 
@@ -482,8 +720,9 @@ def _synthesize_mms(
     mms_code: str,
     speaking_rate: float | None,
     noise_scale: float | None,
+    local_path: str | None = None,
 ) -> SpeechAudio | None:
-    tokenizer, model = load_tts_model(mms_code)
+    tokenizer, model = load_tts_model(mms_code, local_path=local_path)
 
     # VitsModel.forward reads these off the instance, so setting them here
     # is the supported way to control pacing. speaking_rate < 1.0 is
@@ -514,6 +753,213 @@ def _synthesize_mms(
 
     buffer = io.BytesIO()
     scipy.io.wavfile.write(buffer, rate=model.config.sampling_rate, data=np.concatenate(waveforms))
+    buffer.seek(0)
+    return SpeechAudio(data=buffer.read(), mime=WAV_MIME)
+
+
+# --- Coqui multilingual SA VITS (offline after first download) ---------
+
+# Same memoisation contract as the MMS loader: successes AND failures are
+# both remembered, so a model that cannot be fetched is attempted once per
+# process rather than once per message.
+_COQUI_SYNTH = None
+_COQUI_FAILURE: str | None = None
+
+
+def load_coqui_synthesizer():
+    """Downloads and memoises the multilingual South African VITS model.
+
+    Raises SpeechError on failure, and re-raises the recorded reason
+    immediately on later calls.
+    """
+    global _COQUI_SYNTH, _COQUI_FAILURE
+    if _COQUI_SYNTH is not None:
+        return _COQUI_SYNTH
+    if _COQUI_FAILURE is not None:
+        raise SpeechError(_COQUI_FAILURE)
+    if not _HAS_COQUI_BACKEND:
+        raise ImportError("coqui-tts is required for the South African VITS model.")
+
+    try:
+        import json
+        import tempfile
+
+        from huggingface_hub import hf_hub_download
+
+        # Fetched file by file rather than with snapshot_download so a
+        # missing one names itself. The checkpoint is ~150 MB; the rest are
+        # small.
+        paths = {
+            name: hf_hub_download(COQUI_SA_REPO, name)
+            for name in ("config.json", "vits_11_ZA_model.pth",
+                         "model_speakers.pth", "language_ids.json")
+        }
+
+        # The published config.json still carries the absolute paths from
+        # the machine it was trained on, in four places:
+        #
+        #   ./models/11-ZA_multilingual/11_ZA-May-16-2023_.../speakers.pth
+        #   ./models/11-ZA_multilingual/11_ZA-May-16-2023_.../language_ids.json
+        #
+        # both at the top level and again under model_args. Coqui reads
+        # them from the config rather than from the arguments below, so
+        # loading fails with FileNotFoundError on a directory that only
+        # ever existed on the author's disk — which is also why passing the
+        # files explicitly is not enough on its own.
+        #
+        # The speakers file is additionally named `model_speakers.pth` in
+        # the repo and `speakers.pth` in the config, so even a same-shaped
+        # local checkout would not line up.
+        #
+        # Rewritten to the downloaded copies in a temporary config rather
+        # than in place: hf_hub_download returns a path inside the shared
+        # Hugging Face cache, and editing a cached artefact would corrupt
+        # it for every other tool on the machine.
+        config = json.loads(Path(paths["config.json"]).read_text(encoding="utf-8"))
+        for holder in (config, config.get("model_args", {})):
+            if "speakers_file" in holder:
+                holder["speakers_file"] = paths["model_speakers.pth"]
+            if "language_ids_file" in holder:
+                holder["language_ids_file"] = paths["language_ids.json"]
+
+        patched = Path(tempfile.gettempdir()) / "bao_coqui_sa_config.json"
+        patched.write_text(json.dumps(config), encoding="utf-8")
+
+        _COQUI_SYNTH = _CoquiSynthesizer(
+            tts_checkpoint=paths["vits_11_ZA_model.pth"],
+            tts_config_path=str(patched),
+            tts_speakers_file=paths["model_speakers.pth"],
+            tts_languages_file=paths["language_ids.json"],
+            use_cuda=False,
+        )
+    except Exception as e:
+        _COQUI_FAILURE = _explain_coqui_failure(e)
+        raise SpeechError(_COQUI_FAILURE) from e
+
+    logger.info(f"Loaded Coqui South African VITS from {COQUI_SA_REPO}.")
+    return _COQUI_SYNTH
+
+
+def _explain_coqui_failure(error: Exception) -> str:
+    """The two likely causes have completely different fixes, and the raw
+    exception names neither.
+    """
+    detail = str(error).strip() or type(error).__name__
+    lowered = detail.lower()
+    if "403" in detail or "gated" in lowered or "awaiting a review" in lowered:
+        return (
+            f"Access to {COQUI_SA_REPO} has not been granted yet. It is a gated "
+            "repo with automatic approval: open "
+            f"https://huggingface.co/{COQUI_SA_REPO}, accept the terms once, and "
+            "make sure HF_TOKEN is set in .env. This is not a download failure."
+        )
+    if "401" in detail or "unauthorized" in lowered:
+        return (
+            f"Hugging Face refused the request for {COQUI_SA_REPO} (401). Set a "
+            "HF_TOKEN in .env — the model is gated and cannot be fetched anonymously."
+        )
+    if any(k in lowered for k in ("connection", "timeout", "resolve", "network", "ssl")):
+        return (
+            f"Could not download {COQUI_SA_REPO} (~150 MB on first use). "
+            "Check the network, then retry."
+        )
+    return f"The South African VITS model could not be loaded: {detail[:160]}"
+
+
+def reset_coqui_cache() -> None:
+    """Clears the model and any remembered failure, so a fetch that failed
+    because the gate had not been accepted can be retried once it has,
+    without restarting the app.
+    """
+    global _COQUI_SYNTH, _COQUI_FAILURE
+    _COQUI_SYNTH = None
+    _COQUI_FAILURE = None
+
+
+# Characters three of these orthographies need that the checkpoint's
+# 138-symbol vocabulary does not contain. Coqui's behaviour for an unknown
+# symbol is to DISCARD it, which is the worst of the available options: it
+# does not fail, it changes the word. Sepedi "thušo" is spoken as "thuo",
+# and every Tshivenda dental consonant simply vanishes.
+#
+# Folded to the nearest symbol the model does have. Each of these is the
+# conventional plain-ASCII equivalent, not a guess:
+#
+#   š  -> sh   the standard romanisation, and what the digraph represents
+#   ṱ ḓ ṋ ḽ    dental consonants; the plain letters are the same place of
+#              articulation, differing in dentality alone, so t/d/n/l is
+#              the closest sound in the vocabulary
+#   ō ē  -> o e   long vowels to their short counterparts
+#
+# This is an approximation and is only reached for a language that would
+# otherwise have no voice at all. It is applied ONLY here: MMS and edge
+# have their own vocabularies and neither needs it.
+_COQUI_CHARACTER_FOLD = str.maketrans({
+    "š": "sh", "Š": "Sh",
+    "ṱ": "t", "Ṱ": "T", "ḓ": "d", "Ḓ": "D",
+    "ṋ": "n", "Ṋ": "N", "ḽ": "l", "Ḽ": "L",
+    "ō": "o", "Ō": "O", "ē": "e", "Ē": "E",
+})
+
+
+def fold_to_coqui_vocabulary(text: str) -> str:
+    """Replaces characters the SA VITS checkpoint cannot represent with
+    their nearest equivalent, rather than letting it drop them.
+    """
+    folded = text.translate(_COQUI_CHARACTER_FOLD)
+    if folded != text:
+        logger.info(
+            "Folded characters outside the SA VITS vocabulary (e.g. š, ṱ, ḓ) "
+            "to their nearest equivalents before synthesis."
+        )
+    return folded
+
+
+def _synthesize_coqui(text: str, target_language: str) -> SpeechAudio | None:
+    synthesizer = load_coqui_synthesizer()
+    language_id = COQUI_SA_LANGUAGES[target_language]
+
+    # The model is multi-speaker: 130 anonymous NCHLT speakers, named
+    # speaker_0 .. speaker_129. A language id alone does not identify a
+    # voice, so one has to be chosen.
+    #
+    # SORTED, not just "the first one the manager yields". That ordering
+    # comes from a dict built at load time and is not guaranteed stable, so
+    # taking it raw meant the assistant could speak in a different voice
+    # between runs — which is worse than an imperfect voice, because it is
+    # an inconsistent one. Sorting makes the default deterministic.
+    #
+    # Which speaker is "right" is not recoverable from the checkpoint: the
+    # ids carry no language or gender, so there is no principled way to
+    # match a speaker to the language being spoken. The language embedding
+    # is what drives pronunciation; the speaker embedding only sets voice
+    # identity. COQUI_SA_SPEAKER exists so a better-sounding one can be
+    # picked by ear, which is the only way it can be picked.
+    speaker = None
+    manager = getattr(synthesizer.tts_model, "speaker_manager", None)
+    names = sorted(getattr(manager, "speaker_names", None) or [])
+    if names:
+        speaker = COQUI_SA_SPEAKER if COQUI_SA_SPEAKER in names else names[0]
+
+    known = getattr(getattr(synthesizer.tts_model, "language_manager", None),
+                    "language_names", None)
+    if known and language_id not in known:
+        raise SpeechError(
+            f"{COQUI_SA_REPO} has no language id {language_id!r} for "
+            f"{target_language} (it offers {sorted(known)}). The checkpoint's "
+            "language ids differ from the ones this app expects — update "
+            "COQUI_SA_LANGUAGES."
+        )
+
+    waveform = synthesizer.tts(
+        fold_to_coqui_vocabulary(text), speaker_name=speaker, language_name=language_id
+    )
+    array = _normalize_waveform(np.asarray(waveform, dtype=np.float32))
+    if array.size == 0:
+        return None
+
+    buffer = io.BytesIO()
+    scipy.io.wavfile.write(buffer, rate=synthesizer.output_sample_rate, data=array)
     buffer.seek(0)
     return SpeechAudio(data=buffer.read(), mime=WAV_MIME)
 
@@ -588,6 +1034,8 @@ def synthesize_speech(
     noise_scale: float | None = None,
     backend: str = "auto",
     on_error: Callable[[str], None] | None = None,
+    max_characters: int | None = None,
+    on_trim: Callable[[str], None] | None = None,
 ) -> SpeechAudio | None:
     """Synthesizes `text` in `target_language`. Returns None rather than
     raising: speech is an enhancement, and a failed voice must never take
@@ -605,6 +1053,16 @@ def synthesize_speech(
     if not text.strip():
         return None
 
+    limit = DEFAULT_MAX_SPEECH_CHARACTERS if max_characters is None else max_characters
+    text, trimmed = trim_for_speech(text, limit)
+    if trimmed:
+        note = (
+            "Reading the first part of the answer aloud — the full text is above."
+        )
+        logger.info(f"Trimmed synthesis input to {limit} characters.")
+        if on_trim:
+            on_trim(note)
+
     chosen = select_backend(target_language, backend)
     if chosen is None:
         reason = (
@@ -617,6 +1075,12 @@ def synthesize_speech(
         return None
 
     try:
+        if chosen == "coqui":
+            spoken = clean_text_for_speech(text)
+            if not spoken:
+                return None
+            return _synthesize_coqui(spoken, target_language)
+
         if chosen == "edge":
             # Clean first. This was missing: only the MMS branch cleaned its
             # input (via split_into_sentences), so edge-tts received raw
@@ -633,10 +1097,16 @@ def synthesize_speech(
 
         codes = mms_codes or DEFAULT_MMS_CODES
         mms_code = codes.get(target_language, "eng")
+        # A checkpoint registered for this language replaces the pretrained
+        # repo as the source. Nothing else about the path changes: same
+        # engine, same chunking, same pacing controls.
+        local_path = LOCAL_VOICE_MODELS.get(target_language)
         sentences = split_into_sentences(text)
         if not sentences:
             return None
-        return _synthesize_mms(sentences, mms_code, speaking_rate, noise_scale)
+        return _synthesize_mms(
+            sentences, mms_code, speaking_rate, noise_scale, local_path=local_path
+        )
     except Exception as e:
         # Deliberately a one-line warning, not logger.exception: the
         # common cause is "edge-tts is online and there's no network,"
@@ -645,13 +1115,21 @@ def synthesize_speech(
         # conversation in the console during a live demo.
         logger.warning(f"Speech synthesis failed via '{chosen}' for {target_language}: {e}")
 
-        # An edge failure is usually the network; MMS is the offline path,
-        # so it's worth one retry there before giving up entirely.
+        # An edge failure is usually the network. Retry offline — but on a
+        # model that actually speaks this language where one exists, since
+        # falling straight to MMS means the "eng" default reading, say,
+        # isiXhosa words.
+        if chosen == "edge" and _coqui_speaks(target_language):
+            logger.info("Retrying synthesis on the offline Coqui model.")
+            return synthesize_speech(
+                text, target_language, mms_codes, speaking_rate, noise_scale,
+                backend="coqui", on_error=on_error, max_characters=limit,
+            )
         if chosen == "edge" and _HAS_MMS_BACKEND:
             logger.info("Retrying synthesis on the offline MMS backend.")
             return synthesize_speech(
                 text, target_language, mms_codes, speaking_rate, noise_scale,
-                backend="mms", on_error=on_error,
+                backend="mms", on_error=on_error, max_characters=limit,
             )
 
         if on_error:
@@ -671,8 +1149,25 @@ def _explain_failure(chosen: str, target_language: str, mms_codes: dict | None, 
     if chosen == "edge":
         return f"Online voice for {target_language} failed (network?): {detail[:120]}"
 
+    if chosen == "coqui":
+        # Already a written explanation by the time it reaches here; the
+        # MMS advice below is about a different model entirely.
+        return detail[:400]
+
     code = (mms_codes or DEFAULT_MMS_CODES).get(target_language, "eng")
     lowered = detail.lower()
+
+    # A locally trained checkpoint never touches the hub, so none of the
+    # 401/404/rate-limit advice below applies to it. Telling someone to set
+    # a HF_TOKEN when the real problem is a half-synced directory on their
+    # own disk sends them to fix the wrong thing.
+    local_path = LOCAL_VOICE_MODELS.get(target_language)
+    if local_path:
+        return (
+            f"The locally trained {target_language} voice at {local_path} could not "
+            f"be loaded: {detail[:120]}. Check the checkpoint directory is complete, "
+            f"or unregister it from [speech.local_voices] in config.toml to fall back."
+        )
 
     # transformers reports EVERY hub failure with the same sentence — "is not
     # a local folder and is not a valid model identifier" — regardless of
@@ -715,6 +1210,34 @@ def _explain_failure(chosen: str, target_language: str, mms_codes: dict | None, 
             "~145 MB on first use). Check the network, then retry."
         )
     return f"Voice for {target_language} (mms-tts-{code}) failed: {detail[:120]}"
+
+
+SPEAK_AUTO = "Same as my last message"
+
+
+def speech_input_language(choice: str | None, last_language: str | None,
+                          supported: dict[str, str]) -> str:
+    """Which language the recogniser should listen for.
+
+    Speech recognition has to be told the language BEFORE it hears
+    anything — the service takes one locale per request and cannot detect
+    it. This used to be the language of the previous turn only, so the
+    first spoken message was always recognised as English, and switching
+    language mid-conversation was recognised as whatever came before.
+    Measured with clear synthesized speech: isiZulu and Afrikaans both
+    failed outright as en-ZA ("could not understand the audio") and came
+    back near-perfect as zu-ZA and af-ZA. The recogniser was fine; it was
+    being told the wrong language.
+
+    So the speaker can say which language they will use — in the web
+    app from the sidebar, in the console from its menu. Both call this,
+    so the two cannot drift into different rules. The previous
+    turn remains the default, and anything the recogniser has no locale
+    for — a pan-African language detected last turn, say — falls back to
+    English rather than to an arbitrary code.
+    """
+    language = last_language if (not choice or choice == SPEAK_AUTO) else choice
+    return language if language in supported else "English"
 
 
 def transcribe_audio_bytes(

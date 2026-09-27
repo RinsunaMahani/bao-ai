@@ -8,18 +8,20 @@ entries and finished at two once it was actually queried.
     python scripts/verify_pan_african_voices.py            # needs HF_TOKEN
     python scripts/verify_pan_african_voices.py --edge     # also list edge-tts
 
-WHY THE CODES ARE NOT THE CLASSIFIER'S LABELS. The pan-African detector
-emits MasakhaNEWS label codes. MMS repositories are named by ISO 639-3,
-and for two languages these disagree in a way that produces a silent 404
-if you reuse the classifier's label directly:
+WHY THE CODES ARE NOT ALWAYS THE CLASSIFIER'S LABELS. The pan-African
+detector emits MasakhaNEWS label codes. MMS repositories are named by ISO
+639-3, and a macrolanguage code and its variety code do not both exist.
+Probed with an authenticated request on 2026-09-23:
 
-    swa -> MMS publishes swh (Coastal Swahili), not the swa macrolanguage
-    orm -> MMS publishes gaz (West Central Oromo), not the orm macrolanguage
+    Swahili  mms-tts-swa  404     mms-tts-swh  exists  (Coastal Swahili)
+    Oromo    mms-tts-orm  exists  mms-tts-gaz  404
 
-Both alternates are tried below. A macrolanguage code resolving to one
-specific variety is a real linguistic choice, not a typo to paper over:
-if gaz works, Bao is speaking West Central Oromo specifically, and the
-UI should not claim plain "Oromo".
+The two go OPPOSITE ways, which is why both candidates are tried below
+rather than a rule being applied. An earlier version of this docstring
+said Oromo was published as gaz. It is not, and anything built on that
+claim would have 404ed silently. Swahili resolving to swh is a real
+linguistic choice rather than a typo to paper over: Bao speaks Coastal
+Swahili specifically.
 
 FRENCH IS DIFFERENT. French has excellent neural voices on edge-tts and
 does not need MMS. It is in the classifier because MasakhaNEWS includes
@@ -109,7 +111,7 @@ def main() -> int:
             result = repo_exists(code, token)
             if result is True:
                 available[name] = code
-                note = "  <- variety-specific" if code in ("swh", "gaz") else ""
+                note = "  <- variety-specific" if code == "swh" else ""
                 print(f"  {name:<17} {code}   available{note}")
                 break
             if result is None:
@@ -125,7 +127,13 @@ def main() -> int:
           f"{len(unknown)} unverified, of {len(CANDIDATES)}")
 
     if available:
-        print("\nPaste into config.toml under [speech.pan_african_mms_codes]:")
+        # This used to say "paste into config.toml under
+        # [speech.pan_african_mms_codes]" - a key nothing reads, so following
+        # the instruction changed nothing. These codes are already the
+        # defaults; overrides go in the table Settings.mms_codes merges.
+        print("\nThese are the defaults in bao/core/config.py "
+              "(DEFAULT_PAN_AFRICAN_MMS_CODES).")
+        print("To override one, add it to mms_codes under [languages] in config.toml:")
         for name, code in available.items():
             print(f'  "{name}" = "{code}"')
 
