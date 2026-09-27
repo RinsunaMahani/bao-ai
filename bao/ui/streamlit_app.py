@@ -116,9 +116,23 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
         # next — left the model still reading the previous one. Uploaded
         # documents are deliberately kept: they have their own clear
         # button, and re-uploading after every new topic would be a chore.
-        if st.button("New conversation", use_container_width=True):
-            start_new_conversation(orchestrator)
-            st.rerun()
+        #
+        # A callback, not `if st.button(...): ...; st.rerun()`. Callbacks
+        # run BEFORE the rerun, so the whole script then renders normally.
+        # The earlier version called st.rerun() from inside the handler,
+        # which aborted the run before the settings further down the
+        # sidebar were drawn — and Streamlit drops the state of widgets a
+        # run never reaches. So "New conversation" silently switched
+        # "Speak replies" back on and reset "I'll speak in", the exact
+        # settings start_new_conversation promises to keep. Found by
+        # driving the real page with AppTest; a unit test with a plain dict
+        # could not see it.
+        st.button(
+            "New conversation",
+            on_click=start_new_conversation,
+            args=(orchestrator,),
+            width="stretch",
+        )
         st.markdown("---")
 
         st.subheader("System Status")
@@ -332,9 +346,13 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
                     "Session-scoped and never written to disk. They are "
                     "gone when you close the tab."
                 )
-            if st.button("Clear uploaded documents"):
-                orchestrator.document_retriever.clear()
-                st.rerun()
+            # A callback for the same reason as "New conversation": it runs
+            # before the rerun, so the list above is redrawn empty without
+            # an st.rerun() that could cut the run short.
+            st.button(
+                "Clear uploaded documents",
+                on_click=orchestrator.document_retriever.clear,
+            )
 
 
 def _format_detection_badge(result) -> str:
