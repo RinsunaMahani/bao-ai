@@ -271,6 +271,11 @@ returns its text answer.
 docker compose -f docker/docker-compose.yml up --build -d
 ```
 
+The image includes the TFLite classifier, the pan-African detector and PDF
+uploads, and runs offline without a `.env`. It leaves out speech (torch and
+the voice models are several GB). Compose mounts `bao/`, `data/` and
+`models/` from the host for development, so edits appear without a rebuild.
+
 ## Testing & linting
 
 ```bash
@@ -391,9 +396,11 @@ currency of south africa" gets nothing, because the two share almost no
 content words and TF-IDF has nothing else to go on.
 
 That trade-off is not a tuning mistake. `python sweep_gates.py` sweeps
-both gates together across 24 combinations; F1 varies by only 0.128
-across the entire grid and the shipped configuration is already the
-global best. The gates trade against each other rather than compounding,
+both gates together across 24 combinations; F1 stays between 0.687 and
+0.821 across the whole grid. The best point (threshold 0.15, F1 0.821)
+beats the shipped 0.25 (F1 0.800) by one paraphrase query, measured on the
+set the thresholds were chosen on, so the default was not moved for it.
+The gates trade against each other rather than compounding,
 so **no setting of these constants closes the paraphrase gap** — that
 requires a different representation. This is the measured,
 evidence-based case for semantic embeddings, and it names the specific
@@ -429,11 +436,51 @@ them instead, because most of what they ask about ("president",
 the four is returned as a verified answer. Reproduce with
 `KnowledgeRetriever.best_match_index` and `lookup`.
 
-`python compare_retrievers.py` runs a semantic-embedding backend against
-this same evaluation set for a like-for-like comparison (requires
-`requirements-semantic.txt`). That experiment has not been run in this
-repository yet — the TF-IDF numbers above are measured; the semantic
-column is whatever your run produces.
+### TF-IDF against semantic embeddings
+
+`python compare_retrievers.py` runs a semantic-embedding backend
+(`paraphrase-multilingual-MiniLM-L12-v2`) against the same 70 queries
+(requires `requirements-semantic.txt`). The rule for adopting it was set
+before the first run: better paraphrase recall **without** giving back
+negative rejection. Measured on 2026-09-27:
+
+| Backend | Exact | Paraphrase | Negative (correctly rejected) | F1 |
+|---|---|---|---|---|
+| **TF-IDF, shipped** (threshold 0.25, coverage 0.7) | **15/15** | **7/15** | **37/40** | **0.800** |
+| Semantic at 0.25 | 15/15 | 14/15 | 17/40 | 0.707 |
+| Semantic at its best threshold, 0.55 | 15/15 | 12/15 | 34/40 | 0.857 |
+
+**TF-IDF stays the default. Semantic embeddings are the better
+representation for paraphrases, and they still don't pass the rule:**
+
+- **No threshold meets the rule.** The higher F1 at 0.55 comes from five
+  more paraphrases answered, and three more unrelated questions answered
+  as *verified* facts. A confident wrong answer tagged as verified is the
+  failure this project guards against hardest, so F1 is the wrong
+  tiebreaker here.
+- **Its best threshold sits on a knife edge.** Between 0.50 and 0.60,
+  paraphrase recall falls from 14/15 to 7/15 while negative rejection
+  rises from 29/40 to 39/40. A threshold that sensitive, chosen on the
+  same 70 queries it is scored on, would not be trusted with real
+  traffic.
+- **The test says nothing about this project's languages.** The
+  evaluation set is English, and the model card's list of 50+ training
+  languages includes none of South Africa's ten other official languages,
+  not even Afrikaans.
+- **Cost.** It brings in torch and about 470 MB of weights, where TF-IDF
+  is fitted in a second from the knowledge base. That would end the
+  lightweight offline Docker image.
+
+The coverage gate has no effect on the semantic backend, by design, since
+it corrects a TF-IDF-specific failure. A one-off probe that applied
+TF-IDF's coverage score to semantic matches did meet the rule, at coverage
+0.6 and threshold 0.55: 8/15 paraphrases and 38/40 negatives. That is one
+query better in each category, and a margin of one query on a
+development set is noise. What the experiment does establish is that
+paraphrase recall is fixable by a change of representation (14/15 at low
+thresholds). So the next steps are an embedding model trained on South
+African languages and a larger evaluation set held out from tuning, not
+more tuning of TF-IDF.
 
 ## Developer notes
 
@@ -553,9 +600,10 @@ Stated here so they are read rather than discovered.
 - **South African Sign Language** — the right long-term direction, and
   blocked on data rather than code: see "Accessibility and SASL" above.
   The first step is an annotated corpus built with the Deaf community.
-- Swap `knowledge/embeddings.py`'s TF-IDF implementation for a real
-  multilingual sentence-embedding model to close the false-positive gap
-  documented above.
+- An embedding model trained on South African languages, evaluated on a
+  held-out multilingual set. The general multilingual model has been
+  measured and does not justify a swap on its own (see "TF-IDF against
+  semantic embeddings" above).
 - Reproduce the original 63,613-sentence NCHLT held-out test evaluation
   against this exact deployment, if that dataset becomes available — the
   current 20/20 spot-check and 100% benchmark result are strong evidence
