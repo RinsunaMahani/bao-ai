@@ -156,14 +156,20 @@ bao/
 ├── services/      # language_detector.py, translation.py, speech.py, offline.py
 ├── core/          # config.py, logging.py, security.py, exceptions.py
 ├── ui/            # streamlit_app.py, console_app.py
+├── bootstrap.py   # builds the pipeline once; for_session() gives each visitor their own
 └── evaluation.py  # retrieval + language-detector accuracy harness
 
 data/               # african_data.csv — offline knowledge base
-models/             # language_classifier.tflite — optional ML language detector
-tests/              # pipeline, retrieval, detection, memory, security, RAG evaluation
-docs/               # ARCHITECTURE.md, TECHNICAL_REPORT.md
+models/             # language_classifier.tflite (default detector), pan-African bundle
+tests/              # unit, integration and AppTest UI tests
+docs/               # ARCHITECTURE.md, TECHNICAL_REPORT.md, TRANSLATION_REVIEW.md
 docker/             # Dockerfile, docker-compose.yml
-scripts/            # gates.py, scorecard.py, probe_tts.py, compare_detectors.py, audit_corpus.py
+scripts/
+├── preflight.py              # is THIS machine ready to demo? run before presenting
+├── probe_language_routing.py # is each language answered in itself, end to end?
+├── check_archive.py          # refuses to let a shared zip carry secrets
+├── gates.py, scorecard.py    # hard gates and a summary before review
+└── …                         # voice probes, detector comparison, corpus audit
 evaluate.py         # CLI evaluation runner
 benchmark_bao.py    # CLI benchmark runner
 bao_console.py      # console entrypoint
