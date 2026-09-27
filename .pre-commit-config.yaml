@@ -1,7 +1,16 @@
+# Runs exactly what CI enforces, at the version CI installs.
+#
+# The ruff version matches dev-requirements.txt. It was pinned at v0.6.9
+# while CI ran 0.16.x, so the hook and CI could disagree about what passes.
+#
+# There is deliberately no ruff-format hook. CI does not check formatting,
+# and the codebase is not ruff-formatted: the hook would have rewritten 53
+# of 79 files on a contributor's first commit - a diff unrelated to their
+# change, arriving the moment they followed CONTRIBUTING.md. Adopt the
+# formatter as one deliberate, standalone commit if at all, not by stealth.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
+    rev: v0.16.9
     hooks:
       - id: ruff
         args: [--fix]
-      - id: ruff-format

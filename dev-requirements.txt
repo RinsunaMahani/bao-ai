@@ -1,3 +1,6 @@
 pytest>=8.0.0
 huggingface-hub>=0.18.0
-ruff>=0.6.0
+# Bounded to one minor series: a new ruff minor can add lint rules, which
+# would turn CI red with no change to this code. Move the range - and the
+# rev in .pre-commit-config.yaml - together, on purpose.
+ruff>=0.16,<0.17

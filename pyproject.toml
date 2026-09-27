@@ -93,7 +93,8 @@ pdf = ["pypdf>=4.0.0"]
 # Mirrors requirements-semantic.txt — the alternative retrieval backend
 # that compare_retrievers.py scores against TF-IDF.
 semantic = ["sentence-transformers>=3.0.0"]
-dev = ["pytest>=8.0.0", "ruff>=0.6.0", "huggingface-hub>=0.18.0"]
+# ruff bounded to one minor series; see dev-requirements.txt.
+dev = ["pytest>=8.0.0", "ruff>=0.16,<0.17", "huggingface-hub>=0.18.0"]
 
 [tool.setuptools.packages]
 find = {}
