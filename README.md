@@ -401,21 +401,26 @@ be re-swept per backend rather than carried over as a constant.
 and the shipped behaviour separately, so if either stops holding, the
 docs are what need updating.
 
-Concrete examples of the failure mode, all scoring against a fact about
-South Africa's *currency*:
+How the false positives were closed, measured against the fact about
+South Africa's *currency* that unrelated questions used to land on:
 
-| Unrelated query | Similarity |
-|---|---|
-| "who is the current president of south africa" | 0.765 |
-| "what is the population of south africa" | 0.759 |
-| "what is the history of the roman empire" | 0.543 |
-| "what is the speed of light" | 0.532 |
+| Unrelated query | Originally | Now | Served as verified? |
+|---|---|---|---|
+| "what is the speed of light" | 0.532 | 0.000 | no |
+| "what is the history of the roman empire" | 0.543 | 0.000 | no |
+| "who is the current president of south africa" | 0.765 | 0.602 | no — coverage gate |
+| "what is the population of south africa" | 0.759 | 0.602 | no — coverage gate |
 
-That last one is the clearest statement of the problem: *"what is the
-speed of light"* scores 0.53 against a currency fact purely on the shared
-function words "what is the of". No threshold separates that from a
-legitimate paraphrase scoring in the same band — which is why this is a
-retrieval-method limitation, not a tuning problem.
+Two different failures, two different fixes. The first pair matched on
+function words alone ("what is the of"); the curated stop-word list in
+`knowledge/embeddings.py` removed them, taking both to 0.000. The second
+pair still share real content words ("south africa") with the currency
+row and still score 0.60 — no similarity threshold can separate that from
+a legitimate paraphrase in the same band — so the coverage gate rejects
+them instead, because most of what they ask about ("president",
+"population") is not in the knowledge base's vocabulary at all. None of
+the four is returned as a verified answer. Reproduce with
+`KnowledgeRetriever.best_match_index` and `lookup`.
 
 `python compare_retrievers.py` runs a semantic-embedding backend against
 this same evaluation set for a like-for-like comparison (requires
