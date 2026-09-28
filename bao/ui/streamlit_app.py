@@ -428,7 +428,13 @@ def _format_detection_badge(result) -> str:
     elif result.detection_backend == "override":
         # Chosen, not detected - saying "Language: isiZulu" here would
         # present the visitor's own choice as the detector's finding.
-        detection_part = f"Replying in {result.detected_language} (chosen in the sidebar)"
+        if result.language_was_requested and result.reply_language != result.detected_language:
+            detection_part = (
+                f"Replying in {result.reply_language}, as your message asks "
+                f"(sidebar: {result.detected_language})"
+            )
+        else:
+            detection_part = f"Replying in {result.detected_language} (chosen in the sidebar)"
     else:
         detection_part = f"Language: {result.detected_language}"
     # When the reply is in a different language from the one detected, say
@@ -437,12 +443,29 @@ def _format_detection_badge(result) -> str:
     # "explain calculus in xitsonga" (English at 83%) produced a badge
     # claiming 83% was "too unsure to use": false, and exactly the kind of
     # line an examiner reads as the detector being broken.
-    if result.reply_language and result.reply_language != result.detected_language:
+    if (
+        result.detection_backend != "override"
+        and result.reply_language
+        and result.reply_language != result.detected_language
+    ):
         if result.language_was_requested:
             detection_part += f" — you asked for {result.reply_language}"
         else:
             detection_part += f" — too unsure to use, replying in {result.reply_language}"
+    # A curated answer is served as written when it cannot be put into the
+    # reply language (offline, or the model busy). The badge must not then
+    # claim a language the words are not in, which it did live: "Replying
+    # in Sesotho" above a Xitsonga greeting.
+    if (
+        result.source == "knowledge_base"
+        and result.text_language
+        and result.reply_language
+        and result.text_language.lower() != result.reply_language.lower()
+    ):
+        detection_part += f" — this answer is in {result.text_language}"
     badge = f"{detection_part} · source: {result.source}"
+    if result.fallback_model:
+        badge += f" ({result.fallback_model}, because the main model was busy)"
     # Cross-lingual turns ("explain X in Xitsonga") answer in a different
     # language from the question. Showing it makes a wrong voice obvious.
     if result.speech_language and result.speech_language != result.detected_language:

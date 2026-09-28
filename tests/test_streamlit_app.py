@@ -175,6 +175,65 @@ def test_the_badge_does_not_present_a_choice_as_a_detection():
     assert "Language:" not in badge and "%" not in badge
 
 
+def _result(**overrides):
+    from bao.ai.orchestrator import PipelineResult
+
+    fields = dict(
+        text="...", detected_language="Sesotho", confidence=1.0,
+        detection_backend="override", source="gemini", latency_ms=1.0,
+        reply_language="Sesotho", language_was_overridden=True,
+    )
+    fields.update(overrides)
+    return PipelineResult(**fields)
+
+
+def test_the_badge_says_when_the_message_overruled_the_sidebar():
+    from bao.ui.streamlit_app import _format_detection_badge
+
+    badge = _format_detection_badge(
+        _result(reply_language="isiZulu", language_was_requested=True)
+    )
+    assert badge.startswith("Replying in isiZulu, as your message asks (sidebar: Sesotho)")
+    assert "you asked for" not in badge, "said once, not twice"
+
+
+def test_the_badge_does_not_claim_a_language_the_answer_is_not_in():
+    """Live: "Replying in Sesotho" above a Xitsonga greeting. When a
+    curated answer can only be served as written, the badge says so.
+    """
+    from bao.ui.streamlit_app import _format_detection_badge
+
+    badge = _format_detection_badge(
+        _result(source="knowledge_base", reply_language="Swahili",
+                detected_language="Swahili", text_language="Xitsonga")
+    )
+    assert "this answer is in Xitsonga" in badge
+
+    same = _format_detection_badge(_result(source="knowledge_base", text_language="Sesotho"))
+    assert "this answer is in" not in same
+
+
+def test_the_badge_names_a_backup_model():
+    from bao.ui.streamlit_app import _format_detection_badge
+
+    badge = _format_detection_badge(_result(fallback_model="gemini-3.5-flash-lite"))
+    assert "gemini-3.5-flash-lite, because the main model was busy" in badge
+    assert "busy" not in _format_detection_badge(_result())
+
+
+def test_a_chosen_language_is_greeted_in_it_on_the_page(page):
+    """The live report, driven through the real page: picker on Sesotho,
+    "avuxeni" typed. Served from the curated rows, so no network is used.
+    """
+    page.sidebar.selectbox(key="reply_in").set_value("Sesotho").run()
+    page.chat_input[0].set_value("avuxeni").run()
+
+    assert not page.exception, [str(e.value) for e in page.exception]
+    reply = [m for m in page.chat_message if m.name == "assistant"][-1]
+    assert reply.markdown[0].value.startswith("Lumela!")
+    assert "this answer is in" not in reply.caption[0].value
+
+
 @pytest.mark.parametrize(("choice", "greeting"), [
     ("Sepedi", "Thobela!"),
     ("Sesotho", "Lumela!"),

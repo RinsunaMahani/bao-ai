@@ -79,6 +79,11 @@ from bao.services.translation import translate_fact
 logger = get_logger(__name__)
 
 
+def _differs(a: str | None, b: str | None) -> bool:
+    """Whether two language names differ, ignoring case and spacing."""
+    return (a or "").strip().lower() != (b or "").strip().lower()
+
+
 @dataclass
 class PipelineResult:
     text: str
@@ -125,6 +130,16 @@ class PipelineResult:
     # is used instead. Separate fields because "what the model said" and
     # "what we did about it" are different claims.
     reply_language: str | None = None
+    # The language the text is KNOWN to be in, when it is known: a curated
+    # answer served as written, or one of the app's own fixed messages
+    # (which are English). None for generated or machine-translated text,
+    # whose language is only intended. The voice follows this over any
+    # choice or guess - a choice says what the user wants, it cannot change
+    # the language the words on screen are actually in.
+    text_language: str | None = None
+    # The backup model that answered, when the main one was busy. None when
+    # the main model answered or no model was involved.
+    fallback_model: str | None = None
 
 
 class Orchestrator:
@@ -195,8 +210,9 @@ class Orchestrator:
         a sentence in any spoken language) and outlived that feature. It is
         now what the web UI's "Reply in" picker passes, which is also what
         makes a pan-African language reachable when the detector is unsure
-        of it. It outranks a language named in the message: the picker is a
-        standing choice the visitor can see, and the badge says it is on.
+        of it. A language named in the message outranks it for that
+        message: the picker is a standing default, and "explain this in
+        zulu" is a request about this one answer.
         """
         start = time.perf_counter()
         timings: dict[str, float] = {}
@@ -212,6 +228,7 @@ class Orchestrator:
                 detection_backend="none",
                 source="blocked",
                 latency_ms=self._elapsed_ms(start),
+                text_language="English",
             )
 
         # 2. Language detection
@@ -266,18 +283,19 @@ class Orchestrator:
         # was right. The pipeline was answering a different question from
         # the one asked.
         #
-        # Skipped when the caller pinned the language, since an explicit
-        # override is a stronger statement than a phrase in the text.
-        language_was_requested = False
-        if not language_override:
-            requested = named_target_language(user_input)
-            if requested and requested != reply_language:
-                logger.info(
-                    f"Question asks for {requested}; answering in it rather than "
-                    f"{reply_language}."
-                )
-                reply_language = requested
-            language_was_requested = requested is not None
+        # It outranks the "Reply in" picker too, for this message only. It
+        # used not to, and live with the picker on Sesotho, "explain the
+        # concept of animation in zulu" was answered under a badge reading
+        # "Replying in Sesotho" - the app looked as if it had not read the
+        # question. The picker is a standing default; this is a request.
+        requested = named_target_language(user_input)
+        if requested and requested != reply_language:
+            logger.info(
+                f"Question asks for {requested}; answering in it rather than "
+                f"{reply_language}."
+            )
+            reply_language = requested
+        language_was_requested = requested is not None
 
         # 3. Knowledge retrieval (verified facts first, then session documents)
         #
@@ -295,6 +313,25 @@ class Orchestrator:
             self.knowledge_retriever.lookup(user_input, prefer_language=reply_language)
             if self.knowledge_retriever else None
         )
+        # A match written in another language than the reply's is not the
+        # answer yet. When the same fact exists in the reply language - its
+        # reviewed translation, or that language's own greeting - serve that.
+        #
+        # Always for a chosen language: live, with the picker on Sesotho,
+        # "avuxeni" returned the Xitsonga greeting under a badge reading
+        # "Replying in Sesotho". And for an English fact whoever chose the
+        # language, since a reviewed translation beats a machine one. NOT
+        # for a detected language otherwise: a detector unsure between
+        # Xitsonga and siSwati should not swap the greeting the user typed
+        # for one in a language they may not speak.
+        if fact and _differs(fact.language, reply_language) and (
+            language_override or not _differs(fact.language, "English")
+        ):
+            find = getattr(self.knowledge_retriever, "counterpart", None)
+            counterpart = find(fact, reply_language) if find else None
+            if counterpart:
+                logger.info(f"Serving the {reply_language} version of the matched fact.")
+                fact = counterpart
         doc_context = self.document_retriever.search(user_input) if self.document_retriever else ""
         timings["retrieval"] = self._elapsed_ms(stage)
 
@@ -302,17 +339,25 @@ class Orchestrator:
 
         # 4/5/6. Generation branch + translation
         stage = time.perf_counter()
+        fallback_model = None
         if fact:
-            text, source = self._respond_with_fact(fact, reply_language, offline)
+            text, source, text_language = self._respond_with_fact(
+                fact, reply_language, offline, chosen=language_override is not None
+            )
         elif offline:
             if doc_context:
-                text, source = offline_document_excerpt(doc_context), "document_context"
+                text, source, text_language = (
+                    offline_document_excerpt(doc_context), "document_context", None
+                )
             else:
-                text, source = OFFLINE_NO_MATCH_MESSAGE, "offline_fallback"
+                text, source, text_language = OFFLINE_NO_MATCH_MESSAGE, "offline_fallback", "English"
         else:
-            text, source = self._respond_with_gemini(
+            text, source, text_language = self._respond_with_gemini(
                 user_input, reply_language, doc_context, on_chunk=on_chunk
             )
+            if source == "gemini":
+                last = getattr(self.gemini_client, "last_fallback_model", None)
+                fallback_model = last() if callable(last) else None
         timings["generation"] = self._elapsed_ms(stage)
 
         # Memory update happens after generation, so the assistant's own
@@ -331,6 +376,8 @@ class Orchestrator:
             reply_language=reply_language,
             language_was_overridden=language_override is not None,
             language_was_requested=language_was_requested,
+            text_language=text_language,
+            fallback_model=fallback_model,
         )
 
         # 7. Speech (optional, and deliberately last)
@@ -351,11 +398,18 @@ class Orchestrator:
         though the answer was sitting there finished.
         """
         stage = time.perf_counter()
-        speech_language = self._speech_language(
-            result.text,
-            fallback=result.reply_language or result.detected_language,
-            was_overridden=result.language_was_overridden or result.language_was_requested,
-        )
+        if result.text_language:
+            # Known, not guessed - see PipelineResult.text_language. Live,
+            # with the picker on Sesotho, the Xitsonga greeting was read by
+            # the Sesotho voice, and so was the English "model is busy"
+            # message: the choice was treated as the language of the words.
+            speech_language = result.text_language
+        else:
+            speech_language = self._speech_language(
+                result.text,
+                fallback=result.reply_language or result.detected_language,
+                was_overridden=result.language_was_overridden or result.language_was_requested,
+            )
         # Which language will actually be spoken, and why — Tiers 1 to 4.
         spoken_language, note = resolve_voice_language(
             speech_language,
@@ -475,9 +529,15 @@ class Orchestrator:
             )
         return result.language
 
-    def _respond_with_fact(self, fact, language: str, offline: bool) -> tuple[str, str]:
+    def _respond_with_fact(
+        self, fact, language: str, offline: bool, chosen: bool = False
+    ) -> tuple[str, str, str | None]:
         """Returns a curated answer, translating it only when it genuinely
-        needs translating.
+        needs translating, as (text, source, text_language).
+
+        text_language is the fact's own language whenever the text is the
+        fact as written - including when a translation was attempted and
+        failed, since translate_fact then hands back the original.
 
         Three reasons the language check matters, not just the API call it
         saves. Greetings in the knowledge base are written in-language, so
@@ -488,7 +548,17 @@ class Orchestrator:
         from the online one for no reason.
         """
         if offline:
-            return fact.answer, "knowledge_base"
+            return fact.answer, "knowledge_base", fact.language
+
+        # A CHOSEN language is the exception. The reasons below are about a
+        # detector's guess; the picker is the visitor saying which language
+        # they read. handle() has already served the fact's own row in that
+        # language when one exists, so this is the rarer case with none (a
+        # greeting when the choice is Swahili, say): translate it rather than
+        # show a language they did not ask for.
+        if chosen and _differs(fact.language, language):
+            text = translate_fact(fact.answer, language, self.gemini_client)
+            return text, "knowledge_base", (fact.language if text == fact.answer else None)
 
         # A curated answer already written in a South African language is
         # served verbatim, even when the detector thinks the user asked in
@@ -510,9 +580,10 @@ class Orchestrator:
         # those genuinely need it.
         if fact.language and fact.language.strip().lower() != "english":
             logger.info(f"Fact is curated in {fact.language}; serving verbatim, not translating.")
-            return fact.answer, "knowledge_base"
+            return fact.answer, "knowledge_base", fact.language
 
-        return translate_fact(fact.answer, language, self.gemini_client), "knowledge_base"
+        text = translate_fact(fact.answer, language, self.gemini_client)
+        return text, "knowledge_base", (fact.language if text == fact.answer else None)
 
     def _respond_with_gemini(
         self,
@@ -520,9 +591,13 @@ class Orchestrator:
         language: str,
         doc_context: str,
         on_chunk: Callable[[str], None] | None = None,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, str | None]:
+        """Returns (text, source, text_language). The app's own messages
+        are English; a generated answer's language is only intended, so
+        it is None.
+        """
         if not self.gemini_client.is_available():
-            return OFFLINE_NO_KEY_MESSAGE, "offline_fallback"
+            return OFFLINE_NO_KEY_MESSAGE, "offline_fallback", "English"
         try:
             prompt = open_ended_prompt(user_input, context=doc_context)
             memory_context = self.memory.as_context()
@@ -531,13 +606,14 @@ class Orchestrator:
             instruction = system_instruction(language)
 
             if on_chunk is None:
-                return self.gemini_client.generate(prompt, system_instruction=instruction), "gemini"
+                text = self.gemini_client.generate(prompt, system_instruction=instruction)
+                return text, "gemini", None
 
             pieces: list[str] = []
             for piece in self.gemini_client.generate_stream(prompt, system_instruction=instruction):
                 pieces.append(piece)
                 on_chunk(piece)
-            return "".join(pieces), "gemini"
+            return "".join(pieces), "gemini", None
         except GenerationUnavailableError as e:
             # The provider was busy or rate-limiting, and retrying inside
             # the client did not clear it. Told apart from a real failure
@@ -545,10 +621,10 @@ class Orchestrator:
             # and saying "I ran into a problem" instead invites the user to
             # rewrite a question that was never the problem.
             logger.warning(f"Generation unavailable after retries: {e}")
-            return generation_busy_message(e.retry_after), "provider_busy"
+            return generation_busy_message(e.retry_after), "provider_busy", "English"
         except GenerationError as e:
             logger.error(f"Generation failed: {e}")
-            return GENERATION_ERROR_MESSAGE, "offline_fallback"
+            return GENERATION_ERROR_MESSAGE, "offline_fallback", "English"
 
     @staticmethod
     def _elapsed_ms(start: float) -> float:

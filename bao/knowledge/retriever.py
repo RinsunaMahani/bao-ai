@@ -79,6 +79,10 @@ class KnowledgeFact:
     language: str
     row: int
     score: float
+    # Which rows are the same fact in other languages: a shared
+    # Canonical_Id, or for greetings, the category (see counterpart()).
+    category: str = ""
+    canonical_id: str = ""
 
 
 class KnowledgeRetriever:
@@ -395,19 +399,62 @@ class KnowledgeRetriever:
             logger.warning(f"Retrieval failed (query length {len(query)}): {e}")
             return []
 
-        has_language = "Language" in self._df.columns
-        facts = []
-        for match in matches:
-            if match.score < self.threshold:
-                continue
-            row = self._df.iloc[match.index]
-            facts.append(KnowledgeFact(
-                answer=str(row["Answer"]),
-                language=str(row["Language"]) if has_language else "English",
-                row=match.index,
-                score=match.score,
-            ))
-        return facts
+        return [
+            self._fact_at(match.index, match.score)
+            for match in matches
+            if match.score >= self.threshold
+        ]
+
+    def _fact_at(self, position: int, score: float) -> KnowledgeFact:
+        row = self._df.iloc[position]
+
+        def column(name: str, default: str = "") -> str:
+            if name not in self._df.columns:
+                return default
+            value = row[name]
+            return default if value is None or value != value else str(value).strip()
+
+        return KnowledgeFact(
+            answer=str(row["Answer"]),
+            language=column("Language", "English") or "English",
+            row=position,
+            score=score,
+            category=column("Category"),
+            canonical_id=column("Canonical_Id"),
+        )
+
+    def counterpart(self, fact: KnowledgeFact, language: str) -> KnowledgeFact | None:
+        """The same fact written in `language`, or None if there is none.
+
+        "The same fact" is a row sharing its Canonical_Id - a reviewed
+        translation - or, for a greeting, that language's own greeting.
+        The greetings are parallel by design, one per language, but were
+        never given shared ids, and a greeting is the commonest case: a
+        visitor who has chosen Sesotho and types "avuxeni" should be greeted
+        in Sesotho, not handed the Xitsonga greeting.
+
+        Only served rows are searched, so a translation still marked
+        needs-review is never returned by this route either.
+        """
+        if not self.is_initialized or not language or "Language" not in self._df.columns:
+            return None
+        df = self._df
+
+        def normalised(name: str):
+            return df[name].fillna("").astype(str).str.strip().str.lower()
+
+        in_language = normalised("Language") == language.strip().lower()
+        same_fact = None
+        if fact.canonical_id and "Canonical_Id" in df.columns:
+            same_fact = in_language & (normalised("Canonical_Id") == fact.canonical_id.lower())
+        if (same_fact is None or not same_fact.any()) and fact.category.lower() == "greeting":
+            if "Category" in df.columns:
+                same_fact = in_language & (normalised("Category") == "greeting")
+        if same_fact is None or not same_fact.any():
+            return None
+
+        position = int(same_fact.to_numpy().nonzero()[0][0])
+        return self._fact_at(position, fact.score)
 
     def __len__(self) -> int:
         return 0 if self._df is None else len(self._df)

@@ -318,6 +318,17 @@ def test_override_also_wins_for_the_voice(orchestrator):
     ) == "Xitsonga"
 
 
+def _generated(orchestrator, monkeypatch, reply):
+    """Puts the orchestrator online with a model that always answers
+    `reply`: a generated answer is the case where the text's language is
+    not known in advance, so it is where the voice has to be decided.
+    """
+    monkeypatch.setattr(orchestrator.gemini_client, "is_available", lambda: True)
+    monkeypatch.setattr(
+        orchestrator.gemini_client, "generate", lambda prompt, **kw: reply
+    )
+
+
 def test_override_survives_an_intervening_turn(orchestrator, monkeypatch):
     """`speak()` is a separate call from `handle()`, so anything the
     orchestrator remembers about "the current turn" describes whichever
@@ -326,6 +337,11 @@ def test_override_survives_an_intervening_turn(orchestrator, monkeypatch):
     Concretely: a signer picks Sepedi, another turn happens before the
     audio is generated, and the signer's explicit choice was silently
     replaced by a detector guess. The override belongs on the result.
+
+    The reply is a generated one. This used to use the offline "no answer"
+    message and assert the Sepedi voice read it - but that message is
+    English, and reading English with a Sepedi voice is the bug observed
+    live on 2026-09-28, not the behaviour to protect.
     """
     from bao.services.speech import SpeechAudio
 
@@ -333,9 +349,10 @@ def test_override_survives_an_intervening_turn(orchestrator, monkeypatch):
         "bao.ai.orchestrator.synthesize_speech",
         lambda text, lang, **k: SpeechAudio(data=b"x", mime="audio/wav"),
     )
+    _generated(orchestrator, monkeypatch, "Thobela, nka go thuša ka eng?")
 
-    signed = orchestrator.handle("help where", language_override="Sepedi")
-    orchestrator.handle("sawubona")          # an unrelated turn in between
+    signed = orchestrator.handle("help where xyz789", language_override="Sepedi")
+    orchestrator.handle("sawubona xyz789")    # an unrelated turn in between
     orchestrator.speak(signed)
 
     assert signed.speech_language == "Sepedi"
@@ -351,10 +368,51 @@ def test_a_non_overridden_result_still_detects_from_the_reply(orchestrator, monk
         "bao.ai.orchestrator.synthesize_speech",
         lambda text, lang, **k: SpeechAudio(data=b"x", mime="audio/wav"),
     )
-    result = orchestrator.handle("avuxeni")
+    _generated(orchestrator, monkeypatch, "Avuxeni! Ndzi nga ku pfuna njhani?")
+
+    result = orchestrator.handle("something with no knowledge base match xyz789")
     assert not result.language_was_overridden
+    assert result.text_language is None, "a generated reply's language is not known"
     orchestrator.speak(result)
     assert result.speech_language == "Xitsonga"
+
+
+def test_the_busy_message_is_read_in_english_whatever_was_chosen(orchestrator, monkeypatch):
+    """Observed live: the picker on Sesotho, the model busy, and the
+    English "the language model is busy" message read aloud by the Sesotho
+    voice. The app's own messages are English; a choice of reply language
+    cannot change the language they are written in.
+    """
+    from bao.core.exceptions import GenerationUnavailableError
+    from bao.services.speech import SpeechAudio
+
+    spoken = []
+    monkeypatch.setattr(
+        "bao.ai.orchestrator.synthesize_speech",
+        lambda text, lang, **k: spoken.append(lang) or SpeechAudio(data=b"x", mime="audio/wav"),
+    )
+    monkeypatch.setattr(orchestrator.gemini_client, "is_available", lambda: True)
+
+    def busy(prompt, **kw):
+        raise GenerationUnavailableError("503 UNAVAILABLE")
+
+    monkeypatch.setattr(orchestrator.gemini_client, "generate", busy)
+
+    result = orchestrator.handle("explain the concept of animation", language_override="Sesotho")
+    assert result.source == "provider_busy"
+    orchestrator.speak(result)
+    assert result.speech_language == "English"
+    assert spoken in ([], ["English"]), "never the Sesotho voice"
+
+
+def test_the_backup_model_is_reported_on_the_result(orchestrator, monkeypatch):
+    _generated(orchestrator, monkeypatch, "an answer")
+    monkeypatch.setattr(
+        orchestrator.gemini_client, "last_fallback_model", lambda: "backup-model"
+    )
+    result = orchestrator.handle("something with no knowledge base match xyz789")
+    assert result.source == "gemini"
+    assert result.fallback_model == "backup-model"
 
 
 def test_detection_still_runs_when_no_override_given(orchestrator):
@@ -411,10 +469,16 @@ def test_weak_detection_does_not_choose_the_reply_language(orchestrator):
     orchestrator.min_detection_confidence = 0.5
     orchestrator.language_detector = _ConfidenceStub("Afrikaans", 0.42)
 
-    result = orchestrator.handle("what is car in xhosa", force_offline=True)
+    result = orchestrator.handle("what is a car", force_offline=True)
 
     assert result.detected_language == "Afrikaans", "detection is still reported honestly"
     assert result.reply_language == "English", "but it is not acted on"
+
+    # The sentence from the original report now gets what it asked for:
+    # "xhosa" is recognised as naming isiXhosa, so neither the weak guess
+    # nor the English fallback decides the language.
+    asked = orchestrator.handle("what is car in xhosa", force_offline=True)
+    assert asked.reply_language == "isiXhosa"
 
 
 def test_confident_detection_is_acted_on(orchestrator):
@@ -530,9 +594,12 @@ def test_the_named_language_beats_the_detected_one():
     assert "Primary response language: Xitsonga" in captured["instruction"]
 
 
-def test_an_explicit_override_still_wins_over_a_named_language():
-    """A caller pinning the language is a stronger statement than a phrase
-    inside the text, so the override must not be quietly overruled.
+def test_a_named_language_outranks_the_picker_for_that_message():
+    """This test used to assert the opposite. Live, with the picker on
+    Sesotho, "explain the concept of animation in zulu" was answered under
+    "Replying in Sesotho", so the app looked as if it had not read the
+    question. The picker is a standing default; a language named in the
+    message is a request about this one answer.
     """
     from bao.ai.memory import ConversationMemory
     from bao.ai.orchestrator import Orchestrator
@@ -557,7 +624,49 @@ def test_an_explicit_override_still_wins_over_a_named_language():
         memory=ConversationMemory(),
     )
     result = orch.handle("explain calculus in Xitsonga", language_override="Sesotho")
-    assert result.reply_language == "Sesotho"
+    assert result.reply_language == "Xitsonga"
+    assert result.language_was_requested
+    assert result.detected_language == "Sesotho", "the badge still shows the sidebar choice"
+    assert result.detection_backend == "override"
+
+    # And the picker applies again on the next message that names nothing.
+    assert orch.handle("explain calculus", language_override="Sesotho").reply_language == "Sesotho"
+
+
+@pytest.mark.parametrize(("query", "expected"), [
+    ("explain the concept of animation in zulu", "isiZulu"),
+    ("explain gravity in xhosa please", "isiXhosa"),
+    ("tell me about photosynthesis in tsonga", "Xitsonga"),
+    ("answer in shangaan", "Xitsonga"),
+    ("explain this in sotho", "Sesotho"),
+    ("explain this in Northern Sotho", "Sepedi"),
+    ("explain this in sesotho sa leboa", "Sepedi"),
+    ("say it in pedi", "Sepedi"),
+    ("in tswana please", "Setswana"),
+    ("explain it in swazi", "siSwati"),
+    ("translate this in ndebele", "isiNdebele"),
+    ("explain it in kiswahili", "Swahili"),
+    ("explain calculus in isiZulu", "isiZulu"),
+])
+def test_everyday_language_names_are_requests(query, expected):
+    """People type "in zulu", not "in isiZulu". Live, "explain the
+    concept of animation in zulu" was not recognised as a request at all.
+    """
+    from bao.services.language_detector import named_target_language
+
+    assert named_target_language(query) == expected
+
+
+@pytest.mark.parametrize("query", [
+    "are there clinics in Venda?",          # a region, so deliberately not an alias
+    "I am interested in zulu culture",      # an adjective, not a request
+    "what is the weather in KwaZulu-Natal",
+    "what is the history of Swaziland",
+])
+def test_places_and_descriptions_are_not_requests(query):
+    from bao.services.language_detector import named_target_language
+
+    assert named_target_language(query) is None
 
 
 def test_a_quoted_language_does_not_steal_the_voice():

@@ -11,6 +11,8 @@ it as fatal and the turn was lost.
 """
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from bao.ai.client import GeminiClient, _is_transient
@@ -66,6 +68,10 @@ def client(monkeypatch):
     c = GeminiClient.__new__(GeminiClient)
     c.settings = Settings()
     c.model_name = "test-model"
+    # No backup unless a test adds one, so the single-model tests below
+    # keep meaning what they say whatever config.toml lists.
+    c.fallback_models = []
+    c._local = threading.local()
     c.max_attempts = 3
     # Set explicitly rather than inherited from config.toml: a deployment
     # changing its latency tuning must not change what these tests assert.
@@ -77,12 +83,13 @@ def client(monkeypatch):
 
 def _responses(client, monkeypatch, outcomes):
     """Drives models.generate_content through a scripted list of outcomes."""
-    calls = {"n": 0}
+    calls = {"n": 0, "models": []}
 
     class _Models:
         def generate_content(self, **kwargs):
             outcome = outcomes[calls["n"]]
             calls["n"] += 1
+            calls["models"].append(kwargs["model"])
             if isinstance(outcome, Exception):
                 raise outcome
             return type("R", (), {"text": outcome})()
@@ -128,12 +135,13 @@ def test_retrying_can_be_switched_off(client, monkeypatch):
 
 
 def _stream(client, monkeypatch, scripts):
-    calls = {"n": 0}
+    calls = {"n": 0, "models": []}
 
     class _Models:
         def generate_content_stream(self, **kwargs):
             script = scripts[calls["n"]]
             calls["n"] += 1
+            calls["models"].append(kwargs["model"])
             for item in script:
                 if isinstance(item, Exception):
                     raise item
@@ -165,6 +173,106 @@ def test_a_stream_that_already_emitted_text_is_NOT_retried(client, monkeypatch):
             received.append(piece)
     assert received == ["half an "], "what was already shown stays shown"
     assert calls["n"] == 1, "must not start a second stream"
+
+
+# --- a backup model, when the main one stays busy -----------------------
+#
+# Observed live on 2026-09-28: gemini-3.5-flash answered "high demand" on
+# all three attempts, a second apart, and the visitor got the busy message.
+# Free-tier quotas and queues are per model, so another model is a real
+# second chance rather than the same request again.
+
+
+def test_a_busy_main_model_hands_over_to_the_backup(client, monkeypatch):
+    client.fallback_models = ["backup-model"]
+    calls = _responses(client, monkeypatch, [_ApiError(503)] * 3 + ["backup answer"])
+
+    assert client.generate("hello") == "backup answer"
+    assert calls["models"] == ["test-model"] * 3 + ["backup-model"]
+    assert client.last_fallback_model() == "backup-model", "the badge needs to know"
+
+
+def test_a_long_quota_wait_goes_straight_to_the_backup(client, monkeypatch):
+    """The main model's quota is spent, and the backup has its own. The
+    no-quick-retries rule still holds for the main model: one call, then
+    move on.
+    """
+    client.fallback_models = ["backup-model"]
+    calls = _responses(client, monkeypatch, [_RateLimited(), "backup answer"])
+
+    assert client.generate("hello") == "backup answer"
+    assert calls["models"] == ["test-model", "backup-model"]
+
+
+def test_the_main_models_answer_clears_the_backup_flag(client, monkeypatch):
+    client.fallback_models = ["backup-model"]
+    _responses(client, monkeypatch, [_ApiError(503)] * 3 + ["backup answer", "main answer"])
+    client.generate("first")
+    assert client.last_fallback_model() == "backup-model"
+
+    client.generate("second")
+    assert client.last_fallback_model() is None
+
+
+def test_a_broken_backup_still_reports_the_main_model_as_busy(client, monkeypatch):
+    """A retired backup model name fails with a 404. Reporting that as "I
+    ran into a problem" would hide the actual cause, which is that the main
+    model was busy and the user should simply try again.
+    """
+    client.fallback_models = ["retired-model"]
+    _responses(client, monkeypatch, [_ApiError(503)] * 3 + [_ApiError(404)])
+
+    with pytest.raises(GenerationUnavailableError):
+        client.generate("hello")
+    assert client.last_fallback_model() is None
+
+
+def test_both_models_busy_is_still_the_busy_error(client, monkeypatch):
+    client.fallback_models = ["backup-model"]
+    calls = _responses(client, monkeypatch, [_ApiError(503)] * 6)
+
+    with pytest.raises(GenerationUnavailableError):
+        client.generate("hello")
+    assert calls["n"] == 6
+    assert client.last_fallback_model() is None
+
+
+def test_a_stream_hands_over_before_any_output(client, monkeypatch):
+    client.fallback_models = ["backup-model"]
+    calls = _stream(client, monkeypatch, [[_ApiError(503)]] * 3 + [["from ", "backup"]])
+
+    assert "".join(client.generate_stream("hi")) == "from backup"
+    assert calls["models"][-1] == "backup-model"
+    assert client.last_fallback_model() == "backup-model"
+
+
+def test_a_stream_that_already_emitted_text_does_not_hand_over(client, monkeypatch):
+    """Same rule as retrying: a second model's answer would appear under
+    the first one's half-answer on screen.
+    """
+    client.fallback_models = ["backup-model"]
+    calls = _stream(client, monkeypatch, [["half an ", _ApiError(503)], ["unreachable"]])
+
+    with pytest.raises(GenerationUnavailableError):
+        list(client.generate_stream("hi"))
+    assert calls["models"] == ["test-model"]
+
+
+def test_which_model_answered_is_tracked_per_thread(client, monkeypatch):
+    """One client serves every browser session, and Streamlit runs each
+    session's turn on its own thread. One visitor's backup answer must not
+    appear on another visitor's badge.
+    """
+    client.fallback_models = ["backup-model"]
+    _responses(client, monkeypatch, [_ApiError(503)] * 3 + ["backup answer"])
+    client.generate("hello")
+
+    seen = []
+    other = threading.Thread(target=lambda: seen.append(client.last_fallback_model()))
+    other.start()
+    other.join()
+    assert seen == [None]
+    assert client.last_fallback_model() == "backup-model"
 
 
 # --- when the provider names a wait, retrying makes things worse ---------

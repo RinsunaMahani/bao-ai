@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import random
 import re
+import threading
 import time
 
 from bao.core.config import Settings
@@ -113,11 +114,25 @@ class GeminiClient:
     def __init__(self, settings: Settings, api_key: str | None = None):
         self.settings = settings
         self.model_name = settings.gemini_model
+        self.fallback_models = [
+            m for m in settings.gemini_fallback_models if m != self.model_name
+        ]
         self.max_attempts = max(1, settings.generation_max_attempts)
         self.thinking_level = settings.thinking_level
         self._api_key = api_key
         self.client = None
+        # Per thread, because one client serves every browser session and
+        # Streamlit runs each session's turn on its own thread. An
+        # attribute shared by all of them would report another visitor's
+        # fallback on this visitor's badge.
+        self._local = threading.local()
         self._setup_client()
+
+    def last_fallback_model(self) -> str | None:
+        """The backup model that answered this thread's most recent call,
+        or None when the main model answered it.
+        """
+        return getattr(self._local, "fallback_model", None)
 
     def _sleep_before_retry(self, attempt: int) -> None:
         """Waits before the next attempt, with jitter so several clients
@@ -183,10 +198,50 @@ class GeminiClient:
         waiting for the complete response feels broken, and it's free —
         the total time is unchanged, but time-to-first-word drops from
         the whole generation to a fraction of it.
+
+        When the main model stays busy through its retries, the fallback
+        models are tried in turn, but only while nothing has been shown.
+        Once a piece has reached the caller, a second model would add a
+        second answer after the first, so a failure from then on is final.
         """
         if not self.is_available():
             raise GenerationError("Gemini client is not available (missing SDK or API key).")
 
+        self._local.fallback_model = None
+        models = [self.model_name, *self.fallback_models]
+        busy: GenerationUnavailableError | None = None
+        for index, model in enumerate(models):
+            state = {"produced": False}
+            try:
+                yield from self._stream_from(model, prompt, system_instruction, temperature, state)
+                return
+            except GenerationUnavailableError as e:
+                if state["produced"]:
+                    self._local.fallback_model = None
+                    raise
+                busy = e
+                if index + 1 < len(models):
+                    logger.warning(f"{model} is unavailable; trying {models[index + 1]}.")
+                    self._local.fallback_model = models[index + 1]
+            except GenerationError as e:
+                if index == 0 or state["produced"]:
+                    self._local.fallback_model = None
+                    raise
+                # A backup failing for its own reasons (a retired model
+                # name, say) must not replace the real story, which is that
+                # the main model was busy.
+                logger.error(f"Fallback model {model} failed: {e}")
+                break
+        self._local.fallback_model = None
+        raise busy
+
+    def _stream_from(self, model: str, prompt: str, system_instruction, temperature, state: dict):
+        """One model's streamed attempts, retrying transient failures.
+
+        `state["produced"]` is set once any chunk has been yielded, so the
+        caller can tell a failure before the answer began (safe to hand to
+        another model) from one after (not safe).
+        """
         for attempt in range(self.max_attempts):
             # Tracked per attempt, because it decides whether retrying is
             # even legal: once a chunk has reached the caller it has been
@@ -196,13 +251,14 @@ class GeminiClient:
             produced_any = False
             try:
                 stream = self.client.models.generate_content_stream(
-                    model=self.model_name,
+                    model=model,
                     contents=prompt,
                     config=self._config(system_instruction, temperature),
                 )
                 for chunk in stream:
                     if chunk.text:
                         produced_any = True
+                        state["produced"] = True
                         yield chunk.text
                 if not produced_any:
                     raise GenerationError("Gemini returned an empty response.")
@@ -238,14 +294,38 @@ class GeminiClient:
         decide what the user-facing fallback text should be, which keeps
         that copy in one place (ai/prompts.py) instead of scattered through
         every service that might call Gemini.
+
+        Falls back to the next model in `fallback_models` when one stays
+        busy or out of quota; see generate_stream.
         """
         if not self.is_available():
             raise GenerationError("Gemini client is not available (missing SDK or API key).")
 
+        self._local.fallback_model = None
+        models = [self.model_name, *self.fallback_models]
+        busy: GenerationUnavailableError | None = None
+        for index, model in enumerate(models):
+            try:
+                text = self._generate_from(model, prompt, system_instruction, temperature)
+                self._local.fallback_model = model if index else None
+                return text
+            except GenerationUnavailableError as e:
+                busy = e
+                if index + 1 < len(models):
+                    logger.warning(f"{model} is unavailable; trying {models[index + 1]}.")
+            except GenerationError as e:
+                if index == 0:
+                    raise
+                logger.error(f"Fallback model {model} failed: {e}")
+                break
+        raise busy
+
+    def _generate_from(self, model: str, prompt: str, system_instruction, temperature) -> str:
+        """One model's attempts, retrying transient failures."""
         for attempt in range(self.max_attempts):
             try:
                 response = self.client.models.generate_content(
-                    model=self.model_name,
+                    model=model,
                     contents=prompt,
                     config=self._config(system_instruction, temperature),
                 )

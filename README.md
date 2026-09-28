@@ -352,6 +352,14 @@ picker lets the visitor say which language they mean; it defaults to
 greeting, so the test checks the answer as well as the badge:
 `tests/test_streamlit_app.py::test_reply_in_settles_a_greeting_three_languages_share`.
 
+With a language chosen, a greeting typed in another language is answered
+with the chosen language's own greeting, which is curated for every
+language. A language named in the message ("explain this in zulu") still
+wins for that message, and the badge says so. Everyday names such as
+"zulu", "xhosa", "tsonga", "sotho" and "pedi" count as naming a language.
+"venda" doesn't, because it is also a region ("clinics in Venda?");
+"in Tshivenda" works.
+
 ### Retrieval precision and recall
 
 `python evaluate.py --rag-eval eval/rag_eval.csv` scores retrieval against
@@ -578,7 +586,11 @@ Stated here so they are read rather than discovered.
   message carrying the provider's own wait time rather than as a failure,
   and does not retry a wait it has been told is long — quick retries would
   spend more of the same quota. Transient 503s (the model being busy) *are*
-  retried, up to `[model].generation_max_attempts`.
+  retried, up to `[model].generation_max_attempts`. If the main model is
+  still busy or out of quota after that, `gemini-3.5-flash-lite` is tried
+  before the busy message is shown (`[model].fallback_models`). It is
+  weaker at cross-lingual answers, and the badge names it whenever it
+  answered.
 - **The 0.98 macro F1 is the original training-corpus evaluation.** This
   project independently validated the *deployed* inference path (20/20
   across three small probe sets), which is not the same claim.

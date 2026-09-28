@@ -194,3 +194,90 @@ def test_english_facts_are_still_translated(orchestrator_online):
     )
     assert result.source == "knowledge_base"
     assert result.text == "TRANSLATED"
+
+
+# --- a language the visitor CHOSE ---------------------------------------
+#
+# Observed live on 2026-09-28: the "Reply in" picker on Sesotho, "avuxeni"
+# typed, and the Xitsonga greeting shown under "Replying in Sesotho", then
+# read aloud by the Sesotho voice.
+
+
+@pytest.fixture
+def orchestrator_offline(monkeypatch):
+    from bao.ai.client import GeminiClient
+    from bao.ai.orchestrator import Orchestrator
+    from bao.core.security import SecurityGuardrails
+    from bao.services.language_detector import HeuristicLanguageDetector
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    settings = Settings()
+    return Orchestrator(
+        SecurityGuardrails(),
+        HeuristicLanguageDetector(),
+        KnowledgeRetriever(
+            data_path=settings.knowledge_base_path,
+            threshold=settings.similarity_threshold,
+            min_coverage=settings.min_query_coverage,
+        ),
+        GeminiClient(settings),
+    )
+
+
+@pytest.mark.parametrize("mode", ["orchestrator_online", "orchestrator_offline"])
+def test_a_chosen_language_is_greeted_in_that_language(mode, request):
+    """Every language has its own curated greeting, so a chosen language
+    needs no translation, online or off: serve that language's row.
+    """
+    orchestrator = request.getfixturevalue(mode)
+    result = orchestrator.handle("avuxeni", language_override="Sesotho")
+
+    assert result.text == "Lumela! Nka o thusa jwang?"
+    assert result.text_language == "Sesotho"
+
+
+def test_a_chosen_language_with_no_greeting_is_translated_online(orchestrator_online):
+    result = orchestrator_online.handle("avuxeni", language_override="Swahili")
+    assert result.text == "TRANSLATED"
+    assert result.text_language is None, "machine output: intended, not known"
+
+
+def test_offline_the_greeting_is_served_as_written_and_labelled(orchestrator_offline):
+    """Nothing can translate offline, so the curated greeting is served as
+    written - and the result says which language it is really in, for the
+    badge and the voice.
+    """
+    result = orchestrator_offline.handle("avuxeni", language_override="Swahili")
+    assert result.text == "Avuxeni! Ndzi nga ku pfuna njhani?"
+    assert result.text_language == "Xitsonga"
+
+
+def test_a_detected_language_does_not_swap_the_greeting(orchestrator_online):
+    """Only a CHOICE swaps rows. A detector unsure between Xitsonga and
+    siSwati must not replace the greeting the user typed with one in a
+    language they may not speak.
+    """
+    result = orchestrator_online.handle("avuxeni")
+    assert result.text == "Avuxeni! Ndzi nga ku pfuna njhani?"
+
+
+def test_an_unreviewed_translation_is_never_served_as_a_counterpart(knowledge):
+    """The isiZulu and Xitsonga emergency-number rows share Canonical_Id
+    en-020 with the English one but are still needs-review. counterpart()
+    must not become a side door around that gate.
+    """
+    settings = Settings()
+    english = knowledge[
+        (knowledge["Canonical_Id"] == "en-020") & (knowledge["Language"] == "English")
+    ]
+    assert not english.empty, "fixture assumption: en-020 has an English row"
+    question = english.iloc[0]["Question"]
+
+    served = KnowledgeRetriever(data_path=settings.knowledge_base_path)
+    fact = served.lookup(question)
+    assert fact is not None and fact.canonical_id == "en-020"
+    assert served.counterpart(fact, "isiZulu") is None
+
+    everything = KnowledgeRetriever(data_path=settings.knowledge_base_path, include_unreviewed=True)
+    zulu = everything.counterpart(everything.lookup(question), "isiZulu")
+    assert zulu is not None and zulu.language == "isiZulu" and zulu.canonical_id == "en-020"

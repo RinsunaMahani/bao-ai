@@ -33,10 +33,43 @@ ASSISTANT_LOGO_PATH = os.path.join(BASE_DIR, "docs", "assets", "logo.jpg")
 # chosen.
 GEMINI_MODEL_DEFAULT = "gemini-3.5-flash"
 
+# Tried, in order, when the main model is busy (503) or out of quota (429).
+# Free-tier quotas are per model, so a second model is a second budget as
+# well as a second queue. Observed live on 2026-09-28: gemini-3.5-flash
+# returned "high demand" on three attempts in a row, and a question that
+# needed no special capability got the busy message instead of an answer.
+GEMINI_FALLBACK_MODELS_DEFAULT = ("gemini-3.5-flash-lite",)
+
 LABELS = [
     "English", "isiZulu", "isiXhosa", "Afrikaans", "Sesotho",
     "Setswana", "Sepedi", "Xitsonga", "Tshivenda", "siSwati", "isiNdebele",
 ]
+
+# The names people actually type. "explain this in zulu" is far more
+# common than "in isiZulu", and until this existed it was not recognised
+# as a request at all: the reply language fell back to detection, which
+# read that English sentence as Xitsonga.
+#
+# "venda" is left out on purpose. It is also a region ("clinics in Venda?"),
+# and reading a place as a request would answer the question in Tshivenda.
+# "in Tshivenda" still works.
+LANGUAGE_ALIASES = {
+    "zulu": "isiZulu",
+    "xhosa": "isiXhosa",
+    "ndebele": "isiNdebele",
+    "swati": "siSwati",
+    "swazi": "siSwati",
+    "sotho": "Sesotho",
+    "southern sotho": "Sesotho",
+    "tswana": "Setswana",
+    "pedi": "Sepedi",
+    "northern sotho": "Sepedi",
+    "sesotho sa leboa": "Sepedi",
+    "tsonga": "Xitsonga",
+    "shangaan": "Xitsonga",
+    "kiswahili": "Swahili",
+    "pidgin": "Nigerian Pidgin",
+}
 
 # Offline MMS voice codes. Of these only "eng" and "tso" resolve on Hugging
 # Face; the rest 404 and are kept as the mapping each language WOULD use,
@@ -113,6 +146,16 @@ class Settings:
     @property
     def gemini_model(self) -> str:
         return self._raw.get("model", {}).get("gemini_model", GEMINI_MODEL_DEFAULT)
+
+    @property
+    def gemini_fallback_models(self) -> list[str]:
+        """Models to try, in order, when the main one is busy or out of
+        quota. An empty list turns the fallback off.
+        """
+        models = self._raw.get("model", {}).get(
+            "fallback_models", list(GEMINI_FALLBACK_MODELS_DEFAULT)
+        )
+        return [str(m).strip() for m in models if str(m).strip()]
 
     @property
     def thinking_level(self) -> str:
