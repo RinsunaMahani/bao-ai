@@ -11,7 +11,7 @@ torch>=2.2.0
 # install resolves to 5.x, and the seven languages that model covers go
 # silent on a fresh machine. MMS works identically on 4.x, so the cap
 # costs nothing. Lift it only once coqui-tts supports transformers 5.
-transformers>=4.57,<5
+transformers>=4.57,<6
 
 # Real South African neural voices (en-ZA/af-ZA/zu-ZA). Online, but free
 # and keyless. Optional: without it everything falls back to offline MMS.
