@@ -10,4 +10,4 @@
 # working after installing this, that collision is the first thing to
 # check — consider a separate virtualenv for the retrieval experiment.
 -r requirements.txt
-sentence-transformers>=3.0.0
+sentence-transformers>=6.1.0

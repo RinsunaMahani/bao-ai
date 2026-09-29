@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=65.0", "wheel"]
+requires = ["setuptools>=84.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -22,19 +22,19 @@ requires-python = ">=3.11"
 # of them is wrong and nothing says which. If you change a pin here,
 # change it there too.
 dependencies = [
-    "streamlit>=1.40.0",
-    "google-genai>=0.1.1",
-    "python-dotenv>=1.0.1",
+    "streamlit>=1.64.0",
+    "google-genai>=2.25.0",
+    "python-dotenv>=1.2.3",
     # Pinned to the minor series the pan-African bundle was pickled in;
     # see requirements.txt, which carries the same range and the reason.
-    "scikit-learn>=1.9,<1.10",
+    "scikit-learn>=1.9.1,<1.10",
     # Imported by name in services/language_detector.py to load that
     # bundle, so it is declared rather than leaned on as a transitive
     # scikit-learn dependency.
-    "joblib>=1.3.0",
-    "pandas>=2.2.0",
-    "numpy>=1.26.0",
-    "psutil>=5.9.0",
+    "joblib>=1.6.0",
+    "pandas>=3.0.6",
+    "numpy>=2.4.6",
+    "psutil>=7.2.2",
 ]
 
 # Everything below is optional and guarded by try/except in the modules
@@ -48,17 +48,17 @@ dependencies = [
 # belong here. `pyttsx3` was listed but is imported nowhere in the
 # codebase — it is a leftover from the pre-refactor TTS path.
 speech = [
-    "SpeechRecognition>=3.10.0",
-    "scipy>=1.13.0",
-    "sounddevice>=0.4.6",
-    "soundfile>=0.12.1",
-    "torch>=2.2.0",
+    "SpeechRecognition>=3.17.0",
+    "scipy>=1.17.1",
+    "sounddevice>=0.5.6",
+    "soundfile>=0.14.0",
+    "torch>=2.14.0",
     # Capped below 5.0: coqui-tts imports a symbol transformers 5.x removed,
     # and config.toml ships with that voice enabled, so an uncapped resolve
     # silences seven languages on a fresh install. MMS is unaffected by the
     # cap. See the `coqui` extra below.
-    "transformers>=4.57,<5",
-    "edge-tts>=6.1.0",
+    "transformers>=5.17.0,<6",
+    "edge-tts>=7.2.8",
 ]
 # Mirrors requirements-ml.txt. The classifier needs ONE thing from the
 # TensorFlow world — a TFLite interpreter — and `ai-edge-litert` is the
@@ -68,7 +68,7 @@ speech = [
 # always been LiteRT. Install TensorFlow separately only to run
 # convert_model.py or tests/test_tokenizer_parity.py, both of which need
 # Keras itself.
-ml = ["ai-edge-litert>=1.0.0"]
+ml = ["ai-edge-litert>=2.2.0"]
 # The multilingual South African VITS model. A separate extra, not part of
 # `speech`, because the MODEL it loads is cc-by-nc-4.0 while this project
 # is MIT: installing it must be a deliberate act, not something that
@@ -85,16 +85,16 @@ ml = ["ai-edge-litert>=1.0.0"]
 #    through XTTS/Tortoise, so it breaks even though this project only
 #    ever loads VITS. 4.57.6 satisfies both this and MMS.
 coqui = [
-    "coqui-tts[codec]>=0.27.0",
-    "torchaudio>=2.0.0",
-    "transformers>=4.57,<5",
+    "coqui-tts[codec]>=0.27.5",
+    "torchaudio>=2.11.0",
+    "transformers>=5.17.0,<6",
 ]
-pdf = ["pypdf>=4.0.0"]
+pdf = ["pypdf>=6.19.0"]
 # Mirrors requirements-semantic.txt — the alternative retrieval backend
 # that compare_retrievers.py scores against TF-IDF.
-semantic = ["sentence-transformers>=3.0.0"]
+semantic = ["sentence-transformers>=6.1.0"]
 # ruff bounded to one minor series; see dev-requirements.txt.
-dev = ["pytest>=8.0.0", "ruff>=0.16,<0.17", "huggingface-hub>=0.18.0"]
+dev = ["pytest>=9.1.1", "ruff>=0.16.9,<0.17", "huggingface-hub>=2.0.0"]
 
 [tool.setuptools.packages]
 find = {}

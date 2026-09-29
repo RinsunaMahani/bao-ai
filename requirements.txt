@@ -1,8 +1,8 @@
 # Core — the app runs (offline retrieval + heuristic language detection,
 # no speech, no ML classifier) with just this installed.
-streamlit>=1.40.0
-google-genai>=0.1.1
-python-dotenv>=1.0.1
+streamlit>=1.64.0
+google-genai>=2.25.0
+python-dotenv>=1.2.3
 # The pan-African detector bundle is a pickled, fitted Pipeline, saved under
 # scikit-learn 1.9. Pickles load faithfully within a minor series and are
 # not guaranteed to across one, so the range is pinned to it. Patch releases
@@ -15,11 +15,11 @@ python-dotenv>=1.0.1
 # To move to 1.10: widen the range, re-save the bundle, and run its tests.
 #   python scripts/build_pan_african_bundle.py --reexport
 #   python -m pytest tests/test_pan_african.py
-scikit-learn>=1.9,<1.10
+scikit-learn>=1.9.1,<1.10
 # Loads the optional pan-African detector bundle. Small, pure-Python,
 # and already a scikit-learn dependency — declared explicitly because
 # bao/services/language_detector.py imports it by name.
-joblib>=1.3.0
-pandas>=2.2.0
-numpy>=1.26.0
-psutil>=5.9.0
+joblib>=1.6.0
+pandas>=3.0.6
+numpy>=2.4.6
+psutil>=7.2.2

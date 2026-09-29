@@ -11,7 +11,7 @@
 # found" and the ML classifier silently never runs while the app keeps
 # working on the keyword fallback.
 -r requirements.txt
-ai-edge-litert>=1.0.0
+ai-edge-litert>=2.2.0
 
 # Full TensorFlow is NOT required. Install it only if you also need to run
 # convert_model.py (Keras -> TFLite) or tests/test_tokenizer_parity.py,
