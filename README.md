@@ -164,6 +164,9 @@ models/             # language_classifier.tflite (default detector), pan-African
 tests/              # unit, integration and AppTest UI tests
 docs/               # ARCHITECTURE.md, TECHNICAL_REPORT.md, TRANSLATION_REVIEW.md
 docker/             # Dockerfile, docker-compose.yml
+.streamlit/         # config.toml: server security settings (localhost only, upload cap, …)
+.github/            # CI, CodeQL and Dependabot
+SECURITY.md         # how to report a vulnerability; what is protected and what is not
 scripts/
 ├── preflight.py              # is THIS machine ready to demo? run before presenting
 ├── probe_language_routing.py # is each language answered in itself, end to end?
@@ -234,7 +237,16 @@ say so; only `FAIL` blocks a demo.
 streamlit run bao/ui/streamlit_app.py
 ```
 
-Then open `http://localhost:8501`. For the console/voice demo:
+Then open `http://localhost:8501`. The app listens on this machine only
+(`.streamlit/config.toml`); Streamlit's own default is every network
+interface, which would put the app and your API key on whatever network
+the laptop is on. To open it from a phone on the same network, on purpose:
+
+```bash
+streamlit run bao/ui/streamlit_app.py --server.address 0.0.0.0
+```
+
+For the console/voice demo:
 
 ```bash
 python bao_console.py
@@ -275,6 +287,12 @@ The image includes the TFLite classifier, the pan-African detector and PDF
 uploads, and runs offline without a `.env`. It leaves out speech (torch and
 the voice models are several GB). Compose mounts `bao/`, `data/` and
 `models/` from the host for development, so edits appear without a rebuild.
+
+It is hardened in the standard ways: an unprivileged user that cannot
+change the app's files, no compiler toolchain (1.28 GB, down from 1.74 GB),
+a base image pinned by digest, read-only mounts, all Linux capabilities
+dropped, and the port published on `127.0.0.1` only. See
+[SECURITY.md](SECURITY.md).
 
 ## Testing & linting
 
@@ -601,9 +619,13 @@ Stated here so they are read rather than discovered.
   classifier was trained on NCHLT news sentences; short imperatives score
   35-42% where full sentences score 64-91%. Detections below
   `min_detection_confidence` are reported but not acted on.
-- **Prompt-injection handling is mitigation, not protection.** Regex
-  screening of user input plus an untrusted-document boundary. The model
-  still interprets the content.
+- **Prompt-injection handling is mitigation, not protection.** Screening
+  catches the known English phrasings, disguised or not, but not an
+  instruction written in isiZulu or phrased in a new way. The controls that
+  do not depend on spotting a phrase limit the damage: the model has no
+  tools, markdown images cannot carry data out, and uploaded documents are
+  fenced as untrusted data. The model can still be persuaded to say
+  something wrong. [SECURITY.md](SECURITY.md) lists every control.
 - **Offline-first, not offline-only.** Retrieval and detection run
   on-device; open-ended generation and 3 of the 4 voices need a network.
 

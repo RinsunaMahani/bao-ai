@@ -825,7 +825,7 @@ def test_answers_do_not_depend_on_the_audio_stack(monkeypatch):
     silent_session = for_session(shared)
     without_audio = [silent_session.handle(q, force_offline=True) for q in questions]
 
-    for a, b in zip(with_audio, without_audio):
+    for a, b in zip(with_audio, without_audio, strict=True):
         assert (a.text, a.source) == (b.text, b.source)
 
     spoken = silent_session.speak(without_audio[0])

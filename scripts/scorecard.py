@@ -153,7 +153,7 @@ def measure_tests() -> dict:
 
 
 def measure_lint() -> dict:
-    proc = subprocess.run(["ruff", "check", "."], cwd=REPO, capture_output=True, text=True)
+    proc = subprocess.run(["ruff", "check", "."], cwd=REPO, capture_output=True, text=True)  # noqa: S607
     return {"clean": proc.returncode == 0, "output_tail": proc.stdout.strip().splitlines()[-1:] or [""]}
 
 

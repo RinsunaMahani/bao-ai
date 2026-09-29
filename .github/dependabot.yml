@@ -1,0 +1,27 @@
+# Keeps dependencies current, including the SHA-pinned GitHub Actions and
+# the digest-pinned Docker base image, which would otherwise never move.
+# Updates are grouped into one pull request per ecosystem per week, so they
+# arrive as a small weekly batch rather than a stream. CI runs on each one.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    groups:
+      python:
+        patterns: ["*"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: "docker"
+    directory: "/docker"
+    schedule:
+      interval: "weekly"

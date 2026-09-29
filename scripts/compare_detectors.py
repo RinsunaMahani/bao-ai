@@ -74,9 +74,9 @@ def macro_f1(gold: list[str], predicted: list[str]) -> tuple[float, dict[str, fl
     labels = sorted(set(gold))
     per_label: dict[str, float] = {}
     for label in labels:
-        tp = sum(1 for g, p in zip(gold, predicted) if g == label and p == label)
-        fp = sum(1 for g, p in zip(gold, predicted) if g != label and p == label)
-        fn = sum(1 for g, p in zip(gold, predicted) if g == label and p != label)
+        tp = sum(1 for g, p in zip(gold, predicted, strict=True) if g == label and p == label)
+        fp = sum(1 for g, p in zip(gold, predicted, strict=True) if g != label and p == label)
+        fn = sum(1 for g, p in zip(gold, predicted, strict=True) if g == label and p != label)
         precision = tp / (tp + fp) if tp + fp else 0.0
         recall = tp / (tp + fn) if tp + fn else 0.0
         per_label[label] = (
@@ -95,7 +95,7 @@ def evaluate(detector, rows: list[tuple[str, str]]) -> dict:
 
     overall, per_label = macro_f1(gold, predicted)
     confusion: dict[str, Counter] = defaultdict(Counter)
-    for g, p in zip(gold, predicted):
+    for g, p in zip(gold, predicted, strict=True):
         confusion[g][p] += 1
 
     return {
@@ -103,7 +103,7 @@ def evaluate(detector, rows: list[tuple[str, str]]) -> dict:
         "macro_f1": overall,
         "per_label": per_label,
         "confusion": confusion,
-        "accuracy": sum(1 for g, p in zip(gold, predicted) if g == p) / len(rows),
+        "accuracy": sum(1 for g, p in zip(gold, predicted, strict=True) if g == p) / len(rows),
         "ms_per_item": elapsed_ms / len(rows),
     }
 

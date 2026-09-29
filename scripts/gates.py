@@ -65,7 +65,7 @@ def gate_tests() -> GateResult:
 
 
 def gate_lint() -> GateResult:
-    proc = subprocess.run(["ruff", "check", "."], cwd=REPO, capture_output=True, text=True)
+    proc = subprocess.run(["ruff", "check", "."], cwd=REPO, capture_output=True, text=True)  # noqa: S607
     if proc.returncode != 0:
         tail = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else "ruff failed"
         return GateResult("Lint", FAIL, tail)
