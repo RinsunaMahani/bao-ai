@@ -148,15 +148,29 @@ class _KerasWordTokenizer:
     def __init__(self, tokenizer_config_path: str):
         with open(tokenizer_config_path, encoding="utf-8") as f:
             cfg = json.load(f)
-        self.word_index: dict[str, int] = cfg["word_index"]
         self.num_words: int | None = cfg.get("num_words")
         self.oov_token: str | None = cfg.get("oov_token")
+        # Only words the model can actually receive are kept. Keras maps a
+        # word ranked at or beyond num_words to the OOV token, exactly as
+        # it maps a word it has never seen, so dropping those entries
+        # changes no encoding - and it drops 654,386 of the 679,385: 75 MB
+        # of resident memory down to 6 MB, measured. tests/
+        # test_tokenizer_parity.py checks the encodings against Keras
+        # itself, rare words included.
+        vocabulary: dict[str, int] = cfg["word_index"]
+        self.vocabulary_size = len(vocabulary)
+        if self.num_words:
+            vocabulary = {w: i for w, i in vocabulary.items() if i < self.num_words}
+        self.word_index: dict[str, int] = vocabulary
         self.lower: bool = cfg.get("lower", True)
         self.filters: str = cfg.get("filters", '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n')
         self.split: str = cfg.get("split", " ")
         self._translate_table = str.maketrans({c: self.split for c in self.filters})
         self._oov_index = self.word_index.get(self.oov_token) if self.oov_token else None
-        logger.info(f"Loaded word tokenizer: {len(self.word_index)} vocab entries, num_words={self.num_words}.")
+        logger.info(
+            f"Loaded word tokenizer: {self.vocabulary_size} vocab entries, "
+            f"{len(self.word_index)} usable (num_words={self.num_words})."
+        )
 
     def _text_to_word_sequence(self, text: str) -> list[str]:
         if self.lower:

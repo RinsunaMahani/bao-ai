@@ -88,9 +88,11 @@ def main() -> int:
               f"(or pass --reexport)", file=sys.stderr)
         return 1
 
-    vectorizer = pickle.loads(args.vectorizer.read_bytes())
-    classifier = pickle.loads(args.model.read_bytes())
-    encoder = pickle.loads(args.encoder.read_bytes())
+    # The project's own training outputs, named on the command line by the
+    # person building the bundle - never a file from a user or a download.
+    vectorizer = pickle.loads(args.vectorizer.read_bytes())  # noqa: S301
+    classifier = pickle.loads(args.model.read_bytes())  # noqa: S301
+    encoder = pickle.loads(args.encoder.read_bytes())  # noqa: S301
 
     # Column i of predict_proba corresponds to classifier.classes_[i], which
     # is an ENCODED label; the encoder turns that back into a name.

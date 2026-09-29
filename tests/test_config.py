@@ -122,6 +122,9 @@ def test_the_docker_image_contains_every_file_the_app_loads():
         ASSISTANT_LOGO_PATH, s.knowledge_base_path, s.classifier_model_path,
         s.tokenizer_config_path, s.pan_african_model_path, str(repo / "config.toml"),
         str(repo / "bao" / "ui" / "streamlit_app.py"),
+        # The server's security settings: without it the image would run on
+        # Streamlit's defaults (tracebacks shown, usage statistics sent).
+        str(repo / ".streamlit" / "config.toml"),
     ]
     patterns = [
         line.strip() for line in (repo / ".dockerignore").read_text(encoding="utf-8").splitlines()
@@ -146,3 +149,40 @@ def test_the_docker_image_contains_every_file_the_app_loads():
         if excluded(rel)
     ]
     assert not missing, f".dockerignore excludes files the app loads at runtime: {missing}"
+
+
+def test_the_server_settings_stay_secure():
+    """Each of these replaces a Streamlit default that is wrong for an app
+    holding an API key and people's questions. See .streamlit/config.toml.
+    """
+    import tomllib
+    from pathlib import Path
+
+    from bao.knowledge.loader import MAX_UPLOAD_BYTES
+
+    repo = Path(__file__).resolve().parent.parent
+    cfg = tomllib.loads((repo / ".streamlit" / "config.toml").read_text(encoding="utf-8"))
+
+    assert cfg["server"]["address"] == "localhost", "not on the network by default"
+    assert cfg["server"]["enableXsrfProtection"] is True
+    assert cfg["server"]["enableCORS"] is True
+    assert cfg["browser"]["gatherUsageStats"] is False
+    assert cfg["client"]["showErrorDetails"] == "none", "no tracebacks for visitors"
+    assert cfg["server"]["maxUploadSize"] * 2**20 == MAX_UPLOAD_BYTES, (
+        "the browser's upload limit and the loader's must agree"
+    )
+
+
+def test_the_container_still_listens_beyond_its_own_loopback():
+    """Inside a container, localhost is the container itself, so the image
+    must override the address or nothing outside could reach it. The host
+    side is then limited by docker-compose.yml's 127.0.0.1 port binding.
+    """
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    dockerfile = (repo / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    compose = (repo / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "--server.address=0.0.0.0" in dockerfile
+    assert '"127.0.0.1:8501:8501"' in compose, "published on the host's localhost only"
+

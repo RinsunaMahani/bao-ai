@@ -78,7 +78,8 @@ def repo_exists(code: str, token: str | None) -> bool | None:
     if token:
         request.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        # A fixed https:// URL built above, never user input.
+        with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310
             return response.status == 200
     except urllib.error.HTTPError as error:
         if error.code == 404:

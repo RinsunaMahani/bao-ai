@@ -9,6 +9,7 @@ in front of judges. That is worse.
 import pytest
 
 from bao.core.config import Settings
+from bao.core.exceptions import RetrievalError
 from bao.evaluation import evaluate_retrieval_self_consistency
 from bao.knowledge.retriever import KnowledgeRetriever
 
@@ -61,7 +62,7 @@ def test_accuracy_is_not_silently_divided_by_zero(tmp_path):
     """
     broken = KnowledgeRetriever(data_path=str(tmp_path / "missing.csv"))
     assert not broken.is_initialized
-    with pytest.raises(Exception):
+    with pytest.raises(RetrievalError):
         evaluate_retrieval_self_consistency(broken)
 
 

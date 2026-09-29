@@ -217,7 +217,10 @@ class Orchestrator:
         start = time.perf_counter()
         timings: dict[str, float] = {}
 
-        # 1. Security
+        # 1. Security. Invisible and reordering characters are removed first,
+        # so everything downstream - detection, retrieval, memory and the
+        # prompt - sees the text a person would see. See strip_invisible.
+        user_input = self.security.sanitize(user_input)
         try:
             self.security.validate_or_raise(user_input)
         except SecurityViolationError as e:

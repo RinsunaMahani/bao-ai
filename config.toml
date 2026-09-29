@@ -45,6 +45,11 @@ min_detection_confidence = 0.5
 # so one spike does not cost the user their turn. Backoff is a fraction of
 # a second, so 3 attempts add about a second in the worst case. 1 = off.
 generation_max_attempts = 3
+# A request that takes longer than this is abandoned (the SDK default is to
+# wait forever). Also sent to Google, which stops generating at the limit.
+generation_timeout_seconds = 60
+# Longest reply, in tokens. The longest measured was ~500; 0 = no limit.
+max_output_tokens = 4096
 # How much the model reasons before it starts answering. Gemini 3.x models
 # emit NOTHING until thinking finishes, so this is how long someone watches
 # a spinner — streaming cannot shorten it. Measured on gemini-3.5-flash

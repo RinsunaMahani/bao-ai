@@ -1,0 +1,38 @@
+name: CodeQL
+
+# Static analysis for security bugs in the Python code: injection, unsafe
+# deserialisation, path traversal, clear-text logging of sensitive data and
+# the rest of GitHub's security-extended query suite. Free for public
+# repositories. Findings appear under the repository's Security tab.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, so new queries are run against unchanged code too.
+    - cron: "23 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # Needed to upload the results to the Security tab, and only here.
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
+        with:
+          languages: python
+          queries: security-extended
+      - uses: github/codeql-action/analyze@1190a975f95ce23525efb6a3fc21ea29567c1b52  # v3.38.2
+        with:
+          category: "/language:python"

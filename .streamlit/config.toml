@@ -1,0 +1,32 @@
+# Streamlit server settings for Bao. Read from the directory the app is
+# started in, so run `streamlit run bao/ui/streamlit_app.py` from the
+# repository root (the Docker image does). Each value below replaces a
+# Streamlit default that is wrong for an app holding an API key and people's
+# questions. tests/test_config.py keeps them from quietly reverting.
+
+[server]
+# Listen on this machine only. Streamlit's default is every network
+# interface, which put the app, and the Gemini key behind it, on the
+# university Wi-Fi for anyone to use ("Network URL: http://10.x.x.x:8501").
+# To show it on a phone on the same network, start it with
+#   streamlit run bao/ui/streamlit_app.py --server.address 0.0.0.0
+# Docker does that itself inside the container, and docker-compose.yml
+# publishes the port on the host's localhost only.
+address = "localhost"
+# Uploads above this are refused in the browser, before any bytes arrive.
+# The default is 200 MB; bao/knowledge/loader.py enforces the same 10 MB.
+maxUploadSize = 10
+# Both are Streamlit's defaults, stated so that they stay on: XSRF tokens on
+# uploads, and a same-origin policy for the server.
+enableXsrfProtection = true
+enableCORS = true
+
+[browser]
+# Streamlit sends usage statistics by default. Not from an app whose users
+# ask about health and government services.
+gatherUsageStats = false
+
+[client]
+# Visitors see a generic message when something fails, not a traceback with
+# file paths and code. The full error still prints in the terminal.
+showErrorDetails = "none"

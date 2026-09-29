@@ -37,6 +37,7 @@ from dataclasses import dataclass
 
 from bao.core.exceptions import RetrievalError
 from bao.core.logging import get_logger
+from bao.core.security import strip_invisible
 from bao.knowledge.embeddings import (
     KNOWLEDGE_BASE_STOP_WORDS,
     EmbeddingModel,
@@ -495,16 +496,10 @@ class DocumentRetriever:
         repetition as emphasis. It also distorts TF-IDF, which weights
         terms by how many chunks contain them.
         """
-        if not has_sklearn_support() or not content or not content.strip():
-            return 0
-
-        new_chunks = chunk_text(
-            content,
-            source_name=doc_id,
-            chunk_size=self.chunk_size,
-            chunk_overlap=self.chunk_overlap,
-        )
-        if not new_chunks:
+        # Again here, not only in the loader: not every caller comes through
+        # an upload, and this text goes into a prompt. See strip_invisible.
+        content = strip_invisible(content or "")
+        if not has_sklearn_support() or not content.strip():
             return 0
 
         kept = [c for c in self._chunks if getattr(c, "source", "") != doc_id]
@@ -519,9 +514,6 @@ class DocumentRetriever:
              if getattr(c, "source", "") == doc_id),
             len(kept),
         )
-        if replaced:
-            logger.info(f"Re-indexed {doc_id}: replaced {replaced} existing chunk(s).")
-
         room = self.max_chunks - len(kept)
         if room <= 0:
             logger.warning(
@@ -529,12 +521,30 @@ class DocumentRetriever:
                 f"{doc_id} was not indexed. Clear the uploads to add more."
             )
             return 0
-        if len(new_chunks) > room:
+
+        # Cut to what fits BEFORE chunking. chunk_text builds every chunk of
+        # the whole text, so a long file was fully chunked only for all but
+        # `room` chunks to be thrown away - the work grew with the file,
+        # not with what was kept.
+        words = content.split()
+        fits = (room - 1) * (self.chunk_size - self.chunk_overlap) + self.chunk_size
+        if len(words) > fits:
             logger.warning(
-                f"{doc_id} was truncated to {room} of {len(new_chunks)} chunks "
-                f"— the store holds at most {self.max_chunks}."
+                f"{doc_id} was truncated to its first {fits:,} of {len(words):,} "
+                f"words — the store holds at most {self.max_chunks} chunks."
             )
-            new_chunks = new_chunks[:room]
+            content = " ".join(words[:fits])
+
+        new_chunks = chunk_text(
+            content,
+            source_name=doc_id,
+            chunk_size=self.chunk_size,
+            chunk_overlap=self.chunk_overlap,
+        )[:room]
+        if not new_chunks:
+            return 0
+        if replaced:
+            logger.info(f"Re-indexed {doc_id}: replaced {replaced} existing chunk(s).")
 
         self._chunks = kept[:position] + new_chunks + kept[position:]
         self._rebuild()

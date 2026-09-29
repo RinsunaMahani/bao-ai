@@ -34,7 +34,9 @@ logic. Actual audio quality has to be checked by ear on a real machine.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import io
+import os
 import re
 import threading
 from collections.abc import Callable
@@ -42,11 +44,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import scipy.io.wavfile
 
 from bao.core.config import DEFAULT_MMS_CODES, DEFAULT_STT_CODES
 from bao.core.exceptions import SpeechError
-from bao.core.logging import get_logger
+from bao.core.logging import get_logger, quiet_third_party_loggers
 
 try:
     import speech_recognition as sr
@@ -55,33 +56,130 @@ except ImportError:
     sr = None  # type: ignore[assignment]
     _HAS_STT_BACKEND = False
 
-try:
-    import torch
-    from transformers import AutoTokenizer, VitsModel
-    _HAS_MMS_BACKEND = True
-except Exception:  # pragma: no cover - torch/CUDA mismatches raise non-ImportError
-    torch = None  # type: ignore[assignment]
-    AutoTokenizer = None  # type: ignore[assignment]
-    VitsModel = None  # type: ignore[assignment]
-    _HAS_MMS_BACKEND = False
 
-try:
-    import edge_tts
-    _HAS_EDGE_BACKEND = True
-except ImportError:
-    edge_tts = None  # type: ignore[assignment]
-    _HAS_EDGE_BACKEND = False
+def _installed(*modules: str) -> bool:
+    """Whether modules are installed, found WITHOUT importing them."""
+    try:
+        return all(importlib.util.find_spec(m) is not None for m in modules)
+    except (ImportError, ValueError):
+        return False
 
-try:
-    # The maintained fork. The original `TTS` package caps at Python <3.12;
-    # `coqui-tts` supports 3.10-3.14 and installs the same import name.
-    from TTS.utils.synthesizer import Synthesizer as _CoquiSynthesizer
-    _HAS_COQUI_BACKEND = True
-except Exception:  # pragma: no cover - heavy optional dep, many failure modes
-    _CoquiSynthesizer = None  # type: ignore[assignment]
-    _HAS_COQUI_BACKEND = False
+
+# The voice libraries are imported on first use, not when this module is.
+#
+# Imported here, they cost every start of the app about 20 seconds and
+# 574 MB (measured: `import bao.bootstrap` took 19.8s, of which Coqui's TTS
+# package was 7.7s and torch 3.7s) - before the page could draw, and
+# whether or not anything was ever spoken. The web app now starts them on a
+# background thread once the page is up (see preload_in_background), so the
+# first reply usually finds them ready.
+#
+# The flags below only say whether a package is INSTALLED. One that is
+# installed but broken (a torch/CUDA mismatch raises at import) is found
+# out on first use or during the preload, which switches its flag off and
+# reports why, the same way a voice that fails to download is reported.
+torch = None
+AutoTokenizer = None
+VitsModel = None
+_CoquiSynthesizer = None
+edge_tts = None
+_HAS_MMS_BACKEND = _installed("torch", "transformers")
+_HAS_EDGE_BACKEND = _installed("edge_tts")
+# The maintained fork. The original `TTS` package caps at Python <3.12;
+# `coqui-tts` supports 3.10-3.14 and installs the same import name.
+_HAS_COQUI_BACKEND = _installed("TTS")
+
+# One lock for importing and one for loading models, so that two sessions
+# asking for the same voice at once load it once. Each model is hundreds of
+# megabytes; two copies of one was a real possibility on a 15 GB laptop.
+_IMPORT_LOCK = threading.Lock()
+_MODEL_LOCK = threading.RLock()
 
 logger = get_logger(__name__)
+
+
+def _import_mms() -> None:
+    """Imports torch and transformers for the MMS voices, once."""
+    global torch, AutoTokenizer, VitsModel, _HAS_MMS_BACKEND
+    if VitsModel is not None:
+        return
+    with _IMPORT_LOCK:
+        if VitsModel is not None:
+            return
+        try:
+            import torch as _torch
+            from transformers import AutoTokenizer as _AutoTokenizer
+            from transformers import VitsModel as _VitsModel
+        except Exception as e:  # torch/CUDA mismatches raise non-ImportError
+            _HAS_MMS_BACKEND = False
+            raise SpeechError(f"torch/transformers could not be imported: {e}") from e
+        quiet_third_party_loggers()
+        torch, AutoTokenizer = _torch, _AutoTokenizer
+        VitsModel = _VitsModel  # last: other threads test this one
+
+
+def _import_coqui() -> None:
+    """Imports Coqui TTS for the South African VITS model, once."""
+    global _CoquiSynthesizer, _HAS_COQUI_BACKEND
+    if _CoquiSynthesizer is not None:
+        return
+    with _IMPORT_LOCK:
+        if _CoquiSynthesizer is not None:
+            return
+        try:
+            from TTS.utils.synthesizer import Synthesizer
+        except Exception as e:  # heavy optional dependency, many failure modes
+            _HAS_COQUI_BACKEND = False
+            raise SpeechError(f"coqui-tts could not be imported: {e}") from e
+        # Coqui logs each sentence it speaks at INFO, i.e. the reply text.
+        quiet_third_party_loggers()
+        _CoquiSynthesizer = Synthesizer
+
+
+def _import_edge() -> None:
+    global edge_tts, _HAS_EDGE_BACKEND
+    if edge_tts is not None:
+        return
+    with _IMPORT_LOCK:
+        if edge_tts is not None:
+            return
+        try:
+            import edge_tts as _edge_tts
+        except Exception as e:
+            _HAS_EDGE_BACKEND = False
+            raise SpeechError(f"edge-tts could not be imported: {e}") from e
+        edge_tts = _edge_tts
+
+
+def preload_in_background() -> threading.Thread | None:
+    """Imports the installed voice libraries on a daemon thread and
+    returns it, or returns None when there is nothing to load.
+
+    Called by the web app once its shared pipeline is built, so the page
+    draws without waiting for torch, and the first reply that wants a voice
+    usually finds the libraries loaded. A failure here only switches that
+    backend off and logs why; the app does not depend on speech.
+    """
+    steps = []
+    if _HAS_MMS_BACKEND:
+        steps.append(_import_mms)
+    if has_coqui_backend():
+        steps.append(_import_coqui)
+    if _HAS_EDGE_BACKEND:
+        steps.append(_import_edge)
+    if not steps:
+        return None
+
+    def warm() -> None:
+        for step in steps:
+            try:
+                step()
+            except SpeechError as e:
+                logger.warning(f"Voice backend unavailable: {e}")
+
+    thread = threading.Thread(target=warm, name="bao-voice-preload", daemon=True)
+    thread.start()
+    return thread
 
 WAV_MIME = "audio/wav"
 MP3_MIME = "audio/mpeg"
@@ -135,6 +233,14 @@ _EDGE_VOICES = {
 # a clear message rather than silently picking the wrong voice — see
 # _synthesize_coqui.
 COQUI_SA_REPO = "guymandude/South-African-TTS-11-Vits"
+# The exact commit this app loads: the one that was downloaded, listened to
+# and approved on 2026-09-28. The repo belongs to one individual and its
+# model card is an empty template, so an unpinned download would run
+# whatever was pushed there next. The checkpoint is a pickle, which torch
+# loads with weights_only=True (coqui-tts on torch >= 2.4) - that already
+# refuses code, and this keeps the files themselves fixed as well. To
+# move to a newer version, listen to it first, then update this hash.
+COQUI_SA_REVISION = "49e1597eadde5589f3eaa26d7b132110435020c1"
 
 # Which of the model's 130 speakers to use. Set from config.toml via
 # set_coqui_speaker(). Falls back to the first in sorted order when unset
@@ -675,23 +781,38 @@ def load_tts_model(mms_code: str, local_path: str | None = None):
     key = local_path or mms_code
     if key in _TTS_MODELS:
         return _TTS_MODELS[key]
-    if key in _TTS_FAILURES:
-        raise SpeechError(_TTS_FAILURES[key])
 
     if not _HAS_MMS_BACKEND:
         raise ImportError("torch and transformers are required for VITS speech synthesis.")
+    _import_mms()
 
-    source = local_path or f"facebook/mms-tts-{mms_code}"
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(source)
-        model = VitsModel.from_pretrained(source)
-        model.eval()
-    except Exception as e:
-        # Remembered so it is attempted once per process, not once per turn.
-        _TTS_FAILURES[key] = f"{source} could not be loaded: {e}"
-        raise
+    # Held while loading, so a second session asking for the same voice
+    # waits for this load instead of starting its own copy.
+    with _MODEL_LOCK:
+        if key in _TTS_MODELS:
+            return _TTS_MODELS[key]
+        if key in _TTS_FAILURES:
+            raise SpeechError(_TTS_FAILURES[key])
 
-    _TTS_MODELS[key] = (tokenizer, model)
+        source = local_path or f"facebook/mms-tts-{mms_code}"
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(source)
+            # Weights from the Hub must be safetensors, which cannot run
+            # code when loaded; a pickled .bin can. Every MMS voice this
+            # app uses ships model.safetensors, so this refuses nothing
+            # today and stops a repo from ever falling back to a pickle.
+            # A checkpoint on this machine is the operator's own and loads
+            # in either format.
+            model = VitsModel.from_pretrained(
+                source, use_safetensors=None if local_path else True
+            )
+            model.eval()
+        except Exception as e:
+            # Remembered so it is attempted once per process, not once per turn.
+            _TTS_FAILURES[key] = f"{source} could not be loaded: {e}"
+            raise
+
+        _TTS_MODELS[key] = (tokenizer, model)
     logger.info(f"Loaded VITS voice from '{source}'.")
     return tokenizer, model
 
@@ -751,10 +872,19 @@ def _synthesize_mms(
     if not waveforms:
         return None
 
+    return SpeechAudio(
+        data=_wav_bytes(np.concatenate(waveforms), model.config.sampling_rate), mime=WAV_MIME
+    )
+
+
+def _wav_bytes(samples: np.ndarray, rate: int) -> bytes:
+    # scipy is imported here, on first use: it costs 0.6s to import, and a
+    # session that never speaks never needs it.
+    import scipy.io.wavfile
+
     buffer = io.BytesIO()
-    scipy.io.wavfile.write(buffer, rate=model.config.sampling_rate, data=np.concatenate(waveforms))
-    buffer.seek(0)
-    return SpeechAudio(data=buffer.read(), mime=WAV_MIME)
+    scipy.io.wavfile.write(buffer, rate=rate, data=samples)
+    return buffer.getvalue()
 
 
 # --- Coqui multilingual SA VITS (offline after first download) ---------
@@ -779,65 +909,84 @@ def load_coqui_synthesizer():
         raise SpeechError(_COQUI_FAILURE)
     if not _HAS_COQUI_BACKEND:
         raise ImportError("coqui-tts is required for the South African VITS model.")
+    _import_coqui()
 
+    with _MODEL_LOCK:
+        if _COQUI_SYNTH is not None:
+            return _COQUI_SYNTH
+        if _COQUI_FAILURE is not None:
+            raise SpeechError(_COQUI_FAILURE)
+        try:
+            _COQUI_SYNTH = _build_coqui_synthesizer()
+        except Exception as e:
+            _COQUI_FAILURE = _explain_coqui_failure(e)
+            raise SpeechError(_COQUI_FAILURE) from e
+
+    logger.info(f"Loaded Coqui South African VITS from {COQUI_SA_REPO}@{COQUI_SA_REVISION[:7]}.")
+    return _COQUI_SYNTH
+
+
+def _build_coqui_synthesizer():
+    import json
+    import tempfile
+
+    from huggingface_hub import hf_hub_download
+
+    # Fetched file by file rather than with snapshot_download so a missing
+    # one names itself. The checkpoint is ~150 MB; the rest are small.
+    #
+    # Pinned to COQUI_SA_REVISION: without a revision, every fresh download
+    # took whatever the repo's owner last pushed.
+    paths = {
+        name: hf_hub_download(COQUI_SA_REPO, name, revision=COQUI_SA_REVISION)
+        for name in ("config.json", "vits_11_ZA_model.pth",
+                     "model_speakers.pth", "language_ids.json")
+    }
+
+    # The published config.json still carries the absolute paths from the
+    # machine it was trained on, in four places:
+    #
+    #   ./models/11-ZA_multilingual/11_ZA-May-16-2023_.../speakers.pth
+    #   ./models/11-ZA_multilingual/11_ZA-May-16-2023_.../language_ids.json
+    #
+    # both at the top level and again under model_args. Coqui reads them
+    # from the config rather than from the arguments below, so loading fails
+    # with FileNotFoundError on a directory that only ever existed on the
+    # author's disk — which is also why passing the files explicitly is not
+    # enough on its own.
+    #
+    # The speakers file is additionally named `model_speakers.pth` in the
+    # repo and `speakers.pth` in the config, so even a same-shaped local
+    # checkout would not line up.
+    #
+    # Rewritten to the downloaded copies in a temporary config rather than
+    # in place: hf_hub_download returns a path inside the shared Hugging Face
+    # cache, and editing a cached artefact would corrupt it for every other
+    # tool on the machine.
+    config = json.loads(Path(paths["config.json"]).read_text(encoding="utf-8"))
+    for holder in (config, config.get("model_args", {})):
+        if "speakers_file" in holder:
+            holder["speakers_file"] = paths["model_speakers.pth"]
+        if "language_ids_file" in holder:
+            holder["language_ids_file"] = paths["language_ids.json"]
+
+    # A private, uniquely named file, deleted once read. It used to be a
+    # fixed name in the shared temp directory, which on a multi-user Linux
+    # machine anyone could create first - as a link elsewhere, or with a
+    # config of their own for this process to load.
+    fd, patched = tempfile.mkstemp(prefix="bao_coqui_sa_", suffix=".json")
     try:
-        import json
-        import tempfile
-
-        from huggingface_hub import hf_hub_download
-
-        # Fetched file by file rather than with snapshot_download so a
-        # missing one names itself. The checkpoint is ~150 MB; the rest are
-        # small.
-        paths = {
-            name: hf_hub_download(COQUI_SA_REPO, name)
-            for name in ("config.json", "vits_11_ZA_model.pth",
-                         "model_speakers.pth", "language_ids.json")
-        }
-
-        # The published config.json still carries the absolute paths from
-        # the machine it was trained on, in four places:
-        #
-        #   ./models/11-ZA_multilingual/11_ZA-May-16-2023_.../speakers.pth
-        #   ./models/11-ZA_multilingual/11_ZA-May-16-2023_.../language_ids.json
-        #
-        # both at the top level and again under model_args. Coqui reads
-        # them from the config rather than from the arguments below, so
-        # loading fails with FileNotFoundError on a directory that only
-        # ever existed on the author's disk — which is also why passing the
-        # files explicitly is not enough on its own.
-        #
-        # The speakers file is additionally named `model_speakers.pth` in
-        # the repo and `speakers.pth` in the config, so even a same-shaped
-        # local checkout would not line up.
-        #
-        # Rewritten to the downloaded copies in a temporary config rather
-        # than in place: hf_hub_download returns a path inside the shared
-        # Hugging Face cache, and editing a cached artefact would corrupt
-        # it for every other tool on the machine.
-        config = json.loads(Path(paths["config.json"]).read_text(encoding="utf-8"))
-        for holder in (config, config.get("model_args", {})):
-            if "speakers_file" in holder:
-                holder["speakers_file"] = paths["model_speakers.pth"]
-            if "language_ids_file" in holder:
-                holder["language_ids_file"] = paths["language_ids.json"]
-
-        patched = Path(tempfile.gettempdir()) / "bao_coqui_sa_config.json"
-        patched.write_text(json.dumps(config), encoding="utf-8")
-
-        _COQUI_SYNTH = _CoquiSynthesizer(
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(config, f)
+        return _CoquiSynthesizer(
             tts_checkpoint=paths["vits_11_ZA_model.pth"],
-            tts_config_path=str(patched),
+            tts_config_path=patched,
             tts_speakers_file=paths["model_speakers.pth"],
             tts_languages_file=paths["language_ids.json"],
             use_cuda=False,
         )
-    except Exception as e:
-        _COQUI_FAILURE = _explain_coqui_failure(e)
-        raise SpeechError(_COQUI_FAILURE) from e
-
-    logger.info(f"Loaded Coqui South African VITS from {COQUI_SA_REPO}.")
-    return _COQUI_SYNTH
+    finally:
+        os.remove(patched)
 
 
 def _explain_coqui_failure(error: Exception) -> str:
@@ -958,10 +1107,7 @@ def _synthesize_coqui(text: str, target_language: str) -> SpeechAudio | None:
     if array.size == 0:
         return None
 
-    buffer = io.BytesIO()
-    scipy.io.wavfile.write(buffer, rate=synthesizer.output_sample_rate, data=array)
-    buffer.seek(0)
-    return SpeechAudio(data=buffer.read(), mime=WAV_MIME)
+    return SpeechAudio(data=_wav_bytes(array, synthesizer.output_sample_rate), mime=WAV_MIME)
 
 
 # --- edge-tts (online, real SA voices) ---------------------------------
@@ -978,7 +1124,13 @@ def _rate_percent(speaking_rate: float | None) -> str:
     return f"{delta:+d}%"
 
 
-def _run_coroutine_blocking(make_coroutine):
+# Longest a network voice may take before the turn gives up on audio.
+# edge-tts has its own connect and receive timeouts; this bounds the wait
+# on the thread too, so no path through here can block a visitor forever.
+_NETWORK_VOICE_TIMEOUT_SECONDS = 90
+
+
+def _run_coroutine_blocking(make_coroutine, timeout: float = _NETWORK_VOICE_TIMEOUT_SECONDS):
     """Runs an async call from sync code, on its own loop in its own
     thread.
 
@@ -998,7 +1150,9 @@ def _run_coroutine_blocking(make_coroutine):
 
     thread = threading.Thread(target=runner, daemon=True)
     thread.start()
-    thread.join()
+    thread.join(timeout)
+    if thread.is_alive():
+        raise SpeechError(f"The voice service did not answer within {timeout:.0f} seconds.")
 
     if "error" in box:
         raise box["error"]
@@ -1006,6 +1160,7 @@ def _run_coroutine_blocking(make_coroutine):
 
 
 def _synthesize_edge(text: str, voice: str, speaking_rate: float | None) -> SpeechAudio | None:
+    _import_edge()
     rate = _rate_percent(speaking_rate)
 
     async def stream() -> bytes:

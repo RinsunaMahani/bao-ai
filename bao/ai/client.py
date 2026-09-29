@@ -119,6 +119,8 @@ class GeminiClient:
         ]
         self.max_attempts = max(1, settings.generation_max_attempts)
         self.thinking_level = settings.thinking_level
+        self.max_output_tokens = settings.max_output_tokens
+        self.timeout_seconds = settings.generation_timeout_seconds
         self._api_key = api_key
         self.client = None
         # Per thread, because one client serves every browser session and
@@ -140,7 +142,7 @@ class GeminiClient:
         """
         index = min(attempt, len(self._RETRY_BACKOFF_SECONDS) - 1)
         delay = self._RETRY_BACKOFF_SECONDS[index]
-        time.sleep(delay + random.uniform(0, delay / 2))
+        time.sleep(delay + random.uniform(0, delay / 2))  # noqa: S311 - jitter, not a secret
 
     def _setup_client(self) -> None:
         if not _HAS_GENAI:
@@ -153,7 +155,11 @@ class GeminiClient:
             return
 
         try:
-            self.client = genai.Client(api_key=api_key)
+            self.client = genai.Client(
+                api_key=api_key,
+                # Milliseconds. Unset, the SDK waits forever.
+                http_options=types.HttpOptions(timeout=int(self.timeout_seconds * 1000)),
+            )
             logger.info(f"Gemini client initialized with model: {self.model_name}")
         except Exception as e:
             logger.error(f"Failed to initialize Gemini client: {e}")
@@ -165,6 +171,16 @@ class GeminiClient:
         config_kwargs = {"temperature": temperature}
         if system_instruction:
             config_kwargs["system_instruction"] = system_instruction
+        if self.max_output_tokens:
+            config_kwargs["max_output_tokens"] = self.max_output_tokens
+        # No tools are passed, so automatic function calling has nothing it
+        # could call. Switched off explicitly rather than left idle: the
+        # model is given no agency this app does not use, and the SDK stops
+        # logging "AFC is enabled with max remote calls: 10" on every call.
+        if hasattr(types, "AutomaticFunctionCallingConfig"):
+            config_kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(
+                disable=True
+            )
 
         # Gemini 3.x models reason before emitting anything, so this
         # decides how long someone watches a spinner — streaming cannot

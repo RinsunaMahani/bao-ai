@@ -28,8 +28,23 @@ except ImportError:
 
 from bao.core.exceptions import RetrievalError
 from bao.core.logging import get_logger
+from bao.core.security import strip_invisible
 
 logger = get_logger(__name__)
+
+# Limits on what one upload can cost. Nothing bounded extraction before:
+# a 200 MB text file (Streamlit's default ceiling) was decoded and split
+# in full, and a PDF was read to its last page, before the document store
+# kept the ~120 pages it has room for and discarded the rest.
+#
+# 10 MB matches server.maxUploadSize in .streamlit/config.toml, which
+# refuses larger files in the browser; this is the same rule for callers
+# that do not come through the upload box. The page and character caps sit
+# far above what the store keeps (400 chunks is about 700,000 characters),
+# so they only ever stop pathological files.
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_PDF_PAGES = 300
+MAX_EXTRACTED_CHARS = 2_000_000
 
 
 def has_pandas_support() -> bool:
@@ -153,29 +168,22 @@ def extract_text_from_bytes(file_bytes: bytes, filename: str) -> str:
     upload handler has no try/except, so choosing the wrong file replaced
     the page with a traceback. The caller already handles an empty result
     by naming the file it could not read.
+
+    What comes back has invisible and reordering characters removed (see
+    bao.core.security.strip_invisible): the person who wrote a file need
+    not be the person uploading it, and those characters are how an
+    instruction hides from a reader while staying legible to a model.
     """
     ext = filename.rsplit(".", 1)[-1].lower()
+    if len(file_bytes) > MAX_UPLOAD_BYTES:
+        logger.warning(
+            f"{filename!r} is {len(file_bytes) / 2**20:.1f} MB; the limit is "
+            f"{MAX_UPLOAD_BYTES // 2**20} MB, so it was not read."
+        )
+        return ""
 
     try:
-        if ext in {"txt", "md"}:
-            return file_bytes.decode("utf-8", errors="ignore")
-
-        if ext == "csv":
-            decoded = file_bytes.decode("utf-8", errors="ignore")
-            rows = [", ".join(row) for row in csv.reader(io.StringIO(decoded)) if row]
-            return "\n".join(rows)
-
-        if ext == "pdf":
-            if not _HAS_PYPDF:
-                logger.warning("pypdf not installed; cannot extract text from PDF uploads.")
-                return ""
-            reader = PdfReader(io.BytesIO(file_bytes))
-            text = ""
-            for page in reader.pages:
-                extracted = page.extract_text()
-                if extracted:
-                    text += extracted + "\n"
-            return text
+        return _bounded(strip_invisible(_extract(file_bytes, ext)), filename)
     except Exception as e:
         # The filename is logged because the user chose it and needs to
         # know which upload failed; the CONTENT never is, for the same
@@ -183,5 +191,46 @@ def extract_text_from_bytes(file_bytes: bytes, filename: str) -> str:
         logger.warning(f"Could not read {filename!r}: {type(e).__name__}: {e}")
         return ""
 
+
+def _extract(file_bytes: bytes, ext: str) -> str:
+    if ext in {"txt", "md"}:
+        return file_bytes.decode("utf-8", errors="ignore")
+
+    if ext == "csv":
+        decoded = file_bytes.decode("utf-8", errors="ignore")
+        rows = [", ".join(row) for row in csv.reader(io.StringIO(decoded)) if row]
+        return "\n".join(rows)
+
+    if ext == "pdf":
+        if not _HAS_PYPDF:
+            logger.warning("pypdf not installed; cannot extract text from PDF uploads.")
+            return ""
+        reader = PdfReader(io.BytesIO(file_bytes))
+        parts: list[str] = []
+        size = 0
+        for number, page in enumerate(reader.pages):
+            # Both caps are checked as pages are read, so a 5,000-page file
+            # stops at page 300 instead of being parsed to the end first.
+            if number >= MAX_PDF_PAGES or size >= MAX_EXTRACTED_CHARS:
+                logger.warning(
+                    f"PDF has {len(reader.pages)} pages; read the first {number}."
+                )
+                break
+            extracted = page.extract_text()
+            if extracted:
+                parts.append(extracted)
+                size += len(extracted)
+        return "\n".join(parts)
+
     logger.warning(f"Unsupported file format for ingestion: .{ext}")
     return ""
+
+
+def _bounded(text: str, filename: str) -> str:
+    if len(text) <= MAX_EXTRACTED_CHARS:
+        return text
+    logger.warning(
+        f"{filename!r} has {len(text):,} characters of text; kept the first "
+        f"{MAX_EXTRACTED_CHARS:,}."
+    )
+    return text[:MAX_EXTRACTED_CHARS]

@@ -56,6 +56,26 @@ class TelemetryFormatter(logging.Formatter):
         return json.dumps(log_record)
 
 
+# Third-party loggers held at WARNING, whoever configures logging later.
+#
+# Privacy first: Coqui TTS logs every sentence it synthesizes at INFO
+# ("Input: ['Avuxeni!', 'Ndzi nga ku pfuna njhani?']"). That is the reply
+# text, which can quote the user, and it was seen in a live terminal. The
+# rest are volume: one line per HTTP request, one per Gemini call, and
+# Coqui's ~30-line audio-processor banner on every model load.
+_QUIET_LOGGERS = (
+    "TTS", "trainer", "httpx", "httpcore", "google_genai", "urllib3", "huggingface_hub",
+)
+
+
+def quiet_third_party_loggers() -> None:
+    """Holds the loggers above at WARNING. Called again after a library is
+    imported lazily, in case its import changed its own level.
+    """
+    for name in _QUIET_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
 def setup_logging(log_level: int = logging.INFO) -> logging.Logger:
     """Initializes the root 'bao' logger. Safe to call more than once."""
     logger = logging.getLogger(_ROOT_LOGGER_NAME)
@@ -64,6 +84,7 @@ def setup_logging(log_level: int = logging.INFO) -> logging.Logger:
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(TelemetryFormatter())
         logger.addHandler(console_handler)
+        quiet_third_party_loggers()
     return logger
 
 

@@ -405,7 +405,7 @@ def _version_warning(pickled, installed):
         warnings.simplefilter("always")
         warnings.warn(InconsistentVersionWarning(
             estimator_name="Pipeline", current_sklearn_version=installed,
-            original_sklearn_version=pickled))
+            original_sklearn_version=pickled), stacklevel=2)
     return caught
 
 

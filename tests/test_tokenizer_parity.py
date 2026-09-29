@@ -57,6 +57,17 @@ def tokenizer():
     return _KerasWordTokenizer(Settings().tokenizer_config_path)
 
 
+def _rare_words(count: int = 5) -> list[str]:
+    """Words ranked beyond num_words, read from the config file itself: the
+    tokenizer no longer keeps them in memory, since they can only ever
+    encode as OOV.
+    """
+    with open(Settings().tokenizer_config_path, encoding="utf-8") as f:
+        cfg = json.load(f)
+    cap = cfg["num_words"]
+    return [w for w, i in cfg["word_index"].items() if i > cap + 50][:count]
+
+
 def _keras_tokenizer():
     """Rebuilds a real Keras Tokenizer from the same config file."""
     from tensorflow.keras.preprocessing.text import Tokenizer
@@ -101,6 +112,16 @@ def test_reimplementation_matches_keras_exactly(tokenizer, text):
     )
 
 
+@pytest.mark.skipif(not _HAS_TF, reason="TensorFlow not installed — run this on the demo machine")
+def test_rare_words_match_keras(tokenizer):
+    """The case the vocabulary trim relies on. Words ranked beyond
+    num_words are no longer held in memory; Keras must agree that they
+    encode as OOV all the same, or the trim changed what the model sees.
+    """
+    text = " ".join(["sawubona", *_rare_words(), "unjani"])
+    assert tokenizer._texts_to_sequence(text) == _keras_tokenizer().texts_to_sequences([text])[0]
+
+
 # --- Semantics that always run, TensorFlow or not ---------------------
 
 
@@ -111,10 +132,18 @@ def test_words_above_num_words_become_oov_not_dropped(tokenizer):
     it into different positions.
     """
     assert tokenizer.num_words is not None
-    rare = [w for w, i in tokenizer.word_index.items() if i > tokenizer.num_words + 50]
+    rare = _rare_words()
     assert rare, "expected the vocabulary to extend past num_words"
     encoded = tokenizer._texts_to_sequence(rare[0])
     assert encoded == [tokenizer._oov_index]
+
+
+def test_only_usable_words_are_held_in_memory(tokenizer):
+    """75 MB of the full vocabulary was words the model can never receive."""
+    assert tokenizer.vocabulary_size > 600_000
+    assert len(tokenizer.word_index) < tokenizer.num_words
+    assert all(i < tokenizer.num_words for i in tokenizer.word_index.values())
+    assert tokenizer.oov_token in tokenizer.word_index
 
 
 def test_unknown_words_become_oov(tokenizer):
