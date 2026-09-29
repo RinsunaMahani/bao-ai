@@ -17,11 +17,14 @@ updates:
     versioning-strategy: increase-if-necessary
     open-pull-requests-limit: 3
     ignore:
-      # Deliberate caps, each explained where it is declared.
+      # Deliberate caps, each explained where it is declared. Written as
+      # version ranges, not update-types: an update-types rule did not stop
+      # Dependabot widening a cap - with it in place, it still proposed
+      # transformers<6 (#8). A range names the versions never to allow.
       - dependency-name: "transformers"  # requirements-speech.txt: coqui-tts breaks on 5.x
-        update-types: ["version-update:semver-major"]
+        versions: [">=5"]
       - dependency-name: "scikit-learn"  # requirements.txt: the pickled detector is 1.9-only
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+        versions: [">=1.10"]
     groups:
       python:
         patterns: ["*"]
@@ -44,4 +47,4 @@ updates:
       # new digests of 3.11-slim, which carry the security patches, still
       # come through.
       - dependency-name: "python"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+        versions: [">=3.12"]
