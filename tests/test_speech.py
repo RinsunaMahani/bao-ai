@@ -395,3 +395,161 @@ def test_a_language_with_no_recogniser_locale_falls_back_to_english():
 
     assert speech_input_language(SPEAK_AUTO, "Swahili", DEFAULT_STT_CODES) == "English"
     assert speech_input_language(SPEAK_AUTO, None, DEFAULT_STT_CODES) == "English"
+
+
+# --- loading voices safely, and once ------------------------------------
+
+
+class _FakeVits:
+    """Stands in for transformers' VitsModel, recording how it was asked
+    to load. Slow on purpose, so two threads overlap.
+    """
+
+    calls: list = []
+
+    @classmethod
+    def from_pretrained(cls, source, **kwargs):
+        import time
+
+        cls.calls.append((source, kwargs))
+        time.sleep(0.2)
+        return cls()
+
+    def eval(self):
+        return self
+
+
+class _FakeTokenizer:
+    @staticmethod
+    def from_pretrained(source, **kwargs):
+        return object()
+
+
+@pytest.fixture
+def fake_mms(monkeypatch):
+    """MMS 'installed' with fakes, so loading logic runs without torch.
+    VitsModel being set is what tells _import_mms there is nothing to do.
+    """
+    _FakeVits.calls = []
+    monkeypatch.setattr(speech_module, "_HAS_MMS_BACKEND", True)
+    monkeypatch.setattr(speech_module, "VitsModel", _FakeVits)
+    monkeypatch.setattr(speech_module, "AutoTokenizer", _FakeTokenizer)
+    speech_module.reset_tts_cache()
+    yield _FakeVits
+    speech_module.reset_tts_cache()
+
+
+def test_voices_from_the_hub_must_be_safetensors(fake_mms):
+    """safetensors cannot run code when loaded; a pickled .bin can. A
+    checkpoint on the operator's own disk loads in either format.
+    """
+    speech_module.load_tts_model("tso")
+    speech_module.load_tts_model("xho", local_path="/models/my_voice")
+    options = dict(fake_mms.calls)
+    assert options["facebook/mms-tts-tso"]["use_safetensors"] is True
+    assert options["/models/my_voice"]["use_safetensors"] is None
+
+
+def test_two_sessions_asking_at_once_load_one_copy(fake_mms):
+    """Each voice is hundreds of megabytes. Two sessions asking for the
+    same one at the same moment used to load it twice.
+    """
+    import threading
+
+    threads = [threading.Thread(target=speech_module.load_tts_model, args=("tso",)) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert [source for source, _ in fake_mms.calls] == ["facebook/mms-tts-tso"]
+
+
+def test_the_third_party_voice_is_pinned_to_a_revision(monkeypatch):
+    """Unpinned, every fresh download took whatever the repo's owner last
+    pushed. The pin is the commit that was listened to and approved.
+    """
+    import re
+
+    import huggingface_hub
+
+    requested = []
+
+    def fake_download(repo, filename, revision=None, **kwargs):
+        requested.append((repo, filename, revision))
+        raise RuntimeError("stop here; only the request matters")
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_download)
+    monkeypatch.setattr(speech_module, "_HAS_COQUI_BACKEND", True)
+    monkeypatch.setattr(speech_module, "_CoquiSynthesizer", object)
+    monkeypatch.setattr(speech_module, "_COQUI_SYNTH", None)
+    monkeypatch.setattr(speech_module, "_COQUI_FAILURE", None)
+
+    with pytest.raises(speech_module.SpeechError):
+        speech_module.load_coqui_synthesizer()
+    assert re.fullmatch(r"[0-9a-f]{40}", speech_module.COQUI_SA_REVISION)
+    assert requested and all(r == speech_module.COQUI_SA_REVISION for _, _, r in requested)
+
+
+def test_nothing_installed_means_nothing_to_preload(monkeypatch):
+    for flag in ("_HAS_MMS_BACKEND", "_HAS_EDGE_BACKEND", "_HAS_COQUI_BACKEND"):
+        monkeypatch.setattr(speech_module, flag, False)
+    assert speech_module.preload_in_background() is None
+
+
+def test_the_preload_imports_what_is_installed_and_survives_a_failure(monkeypatch):
+    imported = []
+
+    def broken():
+        imported.append("mms")
+        raise speech_module.SpeechError("torch could not be imported")
+
+    monkeypatch.setattr(speech_module, "_HAS_MMS_BACKEND", True)
+    monkeypatch.setattr(speech_module, "_HAS_EDGE_BACKEND", True)
+    monkeypatch.setattr(speech_module, "_HAS_COQUI_BACKEND", False)
+    monkeypatch.setattr(speech_module, "_import_mms", broken)
+    monkeypatch.setattr(speech_module, "_import_edge", lambda: imported.append("edge"))
+
+    thread = speech_module.preload_in_background()
+    thread.join(timeout=5)
+    assert imported == ["mms", "edge"], "one failure must not stop the rest"
+
+
+def test_a_network_voice_cannot_hold_a_turn_forever():
+    import asyncio
+
+    async def never_answers():
+        await asyncio.sleep(30)
+
+    with pytest.raises(speech_module.SpeechError, match="did not answer"):
+        speech_module._run_coroutine_blocking(never_answers, timeout=0.2)
+
+
+def test_spoken_text_never_reaches_the_log():
+    """Coqui TTS logs each sentence it speaks at INFO ("Input: [...]"): the
+    reply text, which can quote the user. Observed in a live terminal.
+    """
+    import logging
+
+    from bao.core.logging import setup_logging
+
+    setup_logging()
+    assert not logging.getLogger("TTS.utils.synthesizer").isEnabledFor(logging.INFO)
+    assert not logging.getLogger("httpx").isEnabledFor(logging.INFO)
+
+
+def test_importing_the_speech_module_does_not_load_torch():
+    """Importing torch, transformers and Coqui up front cost every start
+    of the app ~20 seconds and 574 MB, spoken to or not. Checked in a fresh
+    interpreter, because this one may already have loaded them.
+    """
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys, bao.services.speech; "
+        "print(sorted(m for m in ('torch', 'transformers', 'TTS', 'edge_tts') if m in sys.modules))"
+    )
+    # This interpreter, running the fixed probe above.
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)  # noqa: S603
+    assert out.stdout.strip() == "[]", out.stdout
+

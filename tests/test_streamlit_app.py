@@ -58,6 +58,12 @@ def voice_controls(monkeypatch):
 
     monkeypatch.setattr(speech, "_HAS_EDGE_BACKEND", True)
     monkeypatch.setattr(speech, "_HAS_STT_BACKEND", True)
+    # The page starts the voice libraries loading on a background thread.
+    # With them declared present but not actually installed, that thread's
+    # import fails and switches the backend off again, at whatever moment
+    # it happens to finish: in the Docker image it disabled the checkbox
+    # between two steps of a test. Nothing here needs the real import.
+    monkeypatch.setattr(speech, "preload_in_background", lambda: None)
 
 
 @pytest.fixture
