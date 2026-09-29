@@ -42,8 +42,11 @@
 | **Engineering** | A typed request pipeline, prompt-injection guardrails, conversation memory, speech output, Docker, and CI on every push |
 | **Evaluation** | Reproducible scripts for retrieval precision and recall, detector benchmarks, and gate sweeps, with limitations documented rather than hidden |
 
-📄 **Read the write-up:** [Technical report](docs/TECHNICAL_REPORT.md) ·
-[Architecture](docs/ARCHITECTURE.md) · [Development review log](REVIEW.md)
+📄 **Read the write-up:**
+[Technical documentation (PDF)](docs/Bao_AI_Technical_Documentation.pdf) ·
+[Testing and problem-resolution report (PDF)](docs/Bao_AI_Testing_and_Problem_Resolution_Report.pdf) ·
+[Technical report](docs/TECHNICAL_REPORT.md) · [Architecture](docs/ARCHITECTURE.md) ·
+[Development review log](REVIEW.md)
 
 ---
 
@@ -162,7 +165,7 @@ bao/
 data/               # african_data.csv — offline knowledge base
 models/             # language_classifier.tflite (default detector), pan-African bundle
 tests/              # unit, integration and AppTest UI tests
-docs/               # ARCHITECTURE.md, TECHNICAL_REPORT.md, TRANSLATION_REVIEW.md
+docs/               # the two PDF reports, ARCHITECTURE.md, TECHNICAL_REPORT.md, TRANSLATION_REVIEW.md
 docker/             # Dockerfile, docker-compose.yml
 .streamlit/         # config.toml: server security settings (localhost only, upload cap, …)
 .github/            # CI, CodeQL and Dependabot
@@ -254,28 +257,26 @@ python bao_console.py
 
 ### A note on voices
 
-Speech output uses two backends, picked per language in
-`services/speech.py::select_backend` and controlled by `[speech] backend`
-in `config.toml`:
+Speech output uses three backends, picked per language in
+`services/speech.py::select_backend` (`[speech] backend = "auto"` in
+`config.toml`):
 
 | Language | Backend | Voice | Offline? |
 |---|---|---|---|
-| English | edge-tts | `en-ZA-LukeNeural` | no |
-| Afrikaans | edge-tts | `af-ZA-WillemNeural` | no |
-| isiZulu | edge-tts | `zu-ZA-ThembaNeural` | no |
-| The other eight | Meta MMS-TTS | `facebook/mms-tts-*` | yes |
+| English, Afrikaans, isiZulu | edge-tts (Microsoft) | `en-ZA-LukeNeural`, `af-ZA-WillemNeural`, `zu-ZA-ThembaNeural` | no |
+| Xitsonga | Meta MMS-TTS | `facebook/mms-tts-tso` | yes |
+| isiXhosa, Sesotho, Setswana, Sepedi, Tshivenda, siSwati, isiNdebele | South African VITS (Coqui) | `guymandude/South-African-TTS-11-Vits`, pinned revision | yes, after one download |
 
-Meta's MMS has no South African English model, so with `backend = "mms"`
-(or no network) English is routed through the Afrikaans model. That does
-sound local, but it is Afrikaans letter-to-sound rules applied to English
-words — an Afrikaans accent, not South African English. `edge-tts` has a
-real en-ZA voice, which is why it wins for those three when available. It
-is free and needs no API key, but it is an online call, so the
-offline-first claim in this README applies to the other eight languages
-and to retrieval, not to English/Afrikaans/isiZulu speech.
+Microsoft's are the only genuine South African voices available, so they
+win for those three; they are free and need no key, but they are an
+online call. If that call fails, for example with no network, synthesis
+is retried on the offline South African VITS model, which covers all
+eleven. That model is opt-in (`[speech].enable_coqui_sa`, on in this
+deployment) because its licence is non-commercial; see "Known
+limitations".
 
-Both paths fail soft: if the voice can't be produced the turn still
-returns its text answer.
+Every path fails soft: if the voice can't be produced, the turn still
+returns its text answer, and the interface says why.
 
 ### Run with Docker
 
@@ -613,8 +614,9 @@ Stated here so they are read rather than discovered.
   project independently validated the *deployed* inference path (20/20
   across three small probe sets), which is not the same claim.
 - **The 70-query retrieval set was used to tune the coverage threshold**,
-  so it is a development set, not an independent test set. Precision 0.826
-  should be read as "measured on the set it was tuned on".
+  so it is a development set, not an independent test set. The shipped
+  precision of 0.880 should be read as "measured on the set it was tuned
+  on".
 - **Language detection is out of distribution on short queries.** The
   classifier was trained on NCHLT news sentences; short imperatives score
   35-42% where full sentences score 64-91%. Detections below
