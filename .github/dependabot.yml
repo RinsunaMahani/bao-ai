@@ -8,7 +8,20 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Only when a new release falls OUTSIDE a declared range. The ranges
+    # here are floors or deliberate caps. The default strategy raised every
+    # floor to the newest release - 24 changes in its first pull request -
+    # forcing upgrades nothing needed, and one it would have broken: it set
+    # transformers>=5.17, which coqui-tts 0.27.5 cannot import. CI passed
+    # regardless, because CI does not install the speech stack.
+    versioning-strategy: increase-if-necessary
     open-pull-requests-limit: 3
+    ignore:
+      # Deliberate caps, each explained where it is declared.
+      - dependency-name: "transformers"  # requirements-speech.txt: coqui-tts breaks on 5.x
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "scikit-learn"  # requirements.txt: the pickled detector is 1.9-only
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     groups:
       python:
         patterns: ["*"]
@@ -25,3 +38,10 @@ updates:
     directory: "/docker"
     schedule:
       interval: "weekly"
+    ignore:
+      # The image runs the Python version CI tests as the floor. Moving it
+      # (the first proposal was 3.11 to 3.14) is a decision, not an update;
+      # new digests of 3.11-slim, which carry the security patches, still
+      # come through.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
