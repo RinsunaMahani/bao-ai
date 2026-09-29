@@ -1,6 +1,8 @@
 # Bao AI — Technical Report
 
-*Prepared for presentation, 30 August 2026.*
+*Prepared for presentation, 30 August 2026; figures updated 29 September 2026.
+The full technical documentation and the testing and problem-resolution
+report are the two PDFs in this folder.*
 
 ## 1. Overview
 
@@ -161,11 +163,13 @@ here with that caveat, not as a headline accuracy claim.
 
 ### 4.2 Language detection
 
-`python benchmark_bao.py` runs the active detector against a small,
-hand-labelled query set spanning 4 languages. Current result: 80%
-(20/25), with the one miss being a Sepedi greeting ("Dumela...")
-detected as Sesotho — a specific, known keyword-overlap case (both
-languages share the marker word "dumela"), not a random failure.
+`python benchmark_bao.py` runs both detectors against a small,
+hand-labelled set of 5 queries spanning 4 languages (each run 5 times for
+latency, so 25 inference runs but 5 independent examples). Current result:
+the LSTM classifier 5/5 at 97.8% average confidence; the keyword matcher
+4/5, its miss being a Sepedi greeting ("Dumela...") read as Sesotho — a
+specific, known keyword-overlap case (the languages share the marker word
+"dumela"), not a random failure.
 
 ### 4.2b Disambiguating closely-related languages
 
@@ -193,32 +197,31 @@ own rows; it cannot detect the failure mode that matters in use — an
 unrelated query clearing the threshold and receiving a confidently wrong
 answer.
 
-| Threshold | Exact | Paraphrase | Negative (correctly rejected) |
+| System | Exact | Paraphrase | Negative (correctly rejected) |
 |---|---|---|---|
-| 0.15 | 15/15 | 12/15 | 2/40 |
-| **0.25 (current default)** | **15/15** | **11/15** | **8/40** |
-| 0.45 | 15/15 | 3/15 | 22/40 |
-| 0.55 | 13/15 | 0/15 | 35/40 |
+| Similarity alone, threshold 0.25 | 15/15 | 12/15 | 20/40 |
+| **Shipped: similarity 0.25 and coverage 0.70** | **15/15** | **7/15** | **37/40** |
 
-The result is a genuine, measured limitation rather than a tuning
-oversight: **no threshold performs acceptably on both paraphrases and
-unrelated queries.** Raising it to reject out-of-scope questions destroys
-paraphrase recall; lowering it to catch paraphrases means nearly every
-out-of-scope question receives an incorrect answer. The default was moved
-from 0.15 to 0.25 (the best-F1 point, F1 = 0.765) on this evidence, but
-that is a compromise, not a fix.
+Shipped: precision 0.880, recall 0.733, F1 0.800.
 
-The underlying cause is that TF-IDF measures lexical overlap, not meaning
-— a query sharing common words with a knowledge base entry scores highly
-regardless of topic. Concrete instances, all matching against a fact about South Africa's
-*currency*: "who is the current president of south africa" (0.765), "what
-is the history of the roman empire" (0.543), and — most starkly — "what
-is the speed of light" (0.532), which shares nothing with the entry but
-the function words "what is the of". This is the empirical case for replacing TF-IDF with a
-multilingual sentence-embedding model, and the reason
-`knowledge/embeddings.py` was built as a swappable interface from the
-start — that upgrade is a new class implementing the same interface, not
-a rewrite of the retrieval layer.
+TF-IDF measures word overlap, not meaning, and no similarity threshold
+alone separates paraphrases from unrelated questions. Two fixes closed
+most of the false positives: a curated stop-word list (a question matching
+only on "what is the of" now scores 0.000) and the IDF-weighted coverage
+gate (a question whose informative words the knowledge base does not know,
+such as "what is the minimum wage in south africa", is no longer served as
+a verified answer). The cost is paraphrase recall, 7/15: rephrasings that
+share few words with the stored question fall through to generation.
+
+Sweeping both gates together (24 combinations) shows the tuning is
+exhausted. A semantic embedding model
+(`paraphrase-multilingual-MiniLM-L12-v2`) was measured against the same 70
+questions: it finds more paraphrases (12/15 at its best threshold) but
+answers more unrelated questions as verified (34/40 rejected), and its
+training languages include none of South Africa's other ten. It was not
+adopted; the next step is an embedding model trained on South African
+languages, measured on held-out data. `knowledge/embeddings.py` was built
+as a swappable interface for exactly that change.
 
 ### 4.4 The on-device ML language classifier
 
@@ -266,13 +269,13 @@ strength of the unreproduced training-time number alone.
 
 ## 5. Testing
 
-37 unit and integration tests (`pytest tests/ -v`), covering security
-input validation, both language-detection backends, knowledge retrieval
-(including the TF-IDF limitation above, pinned as a regression test),
-conversation memory, sign-language feature extraction, and the full
-request pipeline end to end — including a mocked test of the
-Gemini-generation path, since no live API dependency is required to run
-the suite. The full pipeline was also driven through real, non-mocked
+449 automated tests in 20 files (`pytest tests/ -v`), covering security
+and prompt injection, all three language detectors, knowledge retrieval
+and its documented trade-offs, conversation memory, speech routing, the
+Gemini client's retries and limits, per-session isolation, the Docker
+build context, and the full request pipeline end to end, offline. CI runs
+them on Python 3.11 and 3.14 on every change. The companion testing report
+(PDF) lists every problem found and how it was fixed. The full pipeline was also driven through real, non-mocked
 Streamlit sessions (`streamlit.testing.v1.AppTest`) for manual-equivalent
 test cases: an English knowledge-base question, an isiZulu question, an
 out-of-scope question with the system offline, and a document-upload
@@ -283,8 +286,8 @@ question — all verified to behave correctly with no exceptions.
 - **Small knowledge base** (38 entries): appropriate for a prototype
   demonstrating an architecture, not a claim of comprehensive coverage.
   Several entries are intentionally campus-specific.
-- **TF-IDF false positives** on topically-unrelated queries (Section 4.3)
-  — architected around, not yet fixed.
+- **Paraphrase recall** (7/15, Section 4.3) is the retrieval weakness;
+  unrelated questions are rejected 37 times out of 40.
 - **No query resolution for follow-ups against the knowledge base**:
   conversation memory feeds Gemini's prompts, but not the retrieval query
   itself, so a follow-up like "what about its opening hours?" only
@@ -323,11 +326,11 @@ question — all verified to behave correctly with no exceptions.
 
 ## 7. Future work
 
-- Real sentence-embedding retrieval to close the TF-IDF false-positive
-  gap, behind the existing swappable `knowledge/embeddings.py` interface.
+- An embedding model trained on South African languages, behind the
+  existing swappable `knowledge/embeddings.py` interface, measured on a
+  held-out set (a general multilingual model was measured and not adopted).
 - A properly labelled, multi-language evaluation dataset (currently a
-  small template) to validate the on-device ML language classifier before
-  considering it for production use.
+  small template) to measure the classifier beyond the current probe sets.
 - Query resolution against conversation memory before knowledge-base
   retrieval, not just before Gemini generation.
 - South African Sign Language. Continuous recognition needs pose, hand
