@@ -235,15 +235,16 @@ def named_target_language(query: str) -> str | None:
     "how it works"; a mention is followed by the noun the name describes.
 
     Matching is case-insensitive because people type "xitsonga" and
-    "Xitsonga" interchangeably.
+    "Xitsonga" interchangeably, and it accepts the everyday names in
+    LANGUAGE_ALIASES ("in zulu", "in tsonga") for the same reason.
     """
     global _TARGET_LANGUAGE_RE
     if _TARGET_LANGUAGE_RE is None:
-        from bao.core.config import LABELS, PAN_AFRICAN_LABELS
+        from bao.core.config import LABELS, LANGUAGE_ALIASES, PAN_AFRICAN_LABELS
 
         # Longest first, so "Nigerian Pidgin" is not shadowed by a shorter
         # name that happens to be a prefix of it.
-        names = sorted(LABELS + PAN_AFRICAN_LABELS, key=len, reverse=True)
+        names = sorted(LABELS + PAN_AFRICAN_LABELS + list(LANGUAGE_ALIASES), key=len, reverse=True)
         pattern = "|".join(re.escape(n.lower()) for n in names)
         # What may follow the name for it to count as a request. Function
         # words only — a noun here means the name is describing that noun.
@@ -264,13 +265,13 @@ def named_target_language(query: str) -> str | None:
     if not match:
         return None
 
-    from bao.core.config import LABELS, PAN_AFRICAN_LABELS
+    from bao.core.config import LABELS, LANGUAGE_ALIASES, PAN_AFRICAN_LABELS
 
-    found = match.group(1).lower()
+    found = " ".join(match.group(1).lower().split())
     for name in LABELS + PAN_AFRICAN_LABELS:
         if name.lower() == found:
             return name
-    return None
+    return LANGUAGE_ALIASES.get(found)
 
 
 class LanguageDetector(ABC):

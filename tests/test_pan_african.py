@@ -249,7 +249,9 @@ def test_the_floor_still_applies_to_the_primary_detector():
     _, orchestrator = build_orchestrator()
     orchestrator.language_detector = _Stub("Afrikaans", 0.42, backend="tflite")
     orchestrator.min_detection_confidence = 0.5
-    result = orchestrator.handle("what is car in xhosa", force_offline=True)
+    # No language named in the question: "what is car in xhosa" used to be
+    # the example here, and now correctly asks for isiXhosa outright.
+    result = orchestrator.handle("what is a car", force_offline=True)
     assert result.reply_language == "English"
 
 
