@@ -750,12 +750,18 @@ class CompositeLanguageDetector(LanguageDetector):
         # A strong secondary answer is evidence the input is not South
         # African at all, which is a claim the primary cannot make about
         # itself. It therefore outranks a confident primary.
+        # The log lines name each detector by the backend that actually
+        # answered. They used to say "pan-African model" whichever detector
+        # this composite wrapped - so when the keyword matcher rescued a
+        # greeting the LSTM could not read, the log credited the pan-African
+        # model (seen in a live terminal: "avuxeni"). A log that names the
+        # wrong component sends whoever reads it to the wrong place.
         if fallback.confidence >= self.secondary_strong:
             if result.confidence >= self.primary_min:
                 logger.info(
-                    f"Primary confident ({result.language} {result.confidence:.2f}) but "
-                    f"pan-African model is stronger ({fallback.language} "
-                    f"{fallback.confidence:.2f}); taking the pan-African answer."
+                    f"Primary confident ({result.language} {result.confidence:.2f}, {result.backend}) "
+                    f"but the {fallback.backend} detector is stronger ({fallback.language} "
+                    f"{fallback.confidence:.2f}); taking its answer."
                 )
             return fallback
 
@@ -767,8 +773,8 @@ class CompositeLanguageDetector(LanguageDetector):
             return result
 
         logger.info(
-            f"Primary detector unsure ({result.language} {result.confidence:.2f}); "
-            f"pan-African model says {fallback.language} ({fallback.confidence:.2f})."
+            f"Primary detector unsure ({result.language} {result.confidence:.2f}, {result.backend}); "
+            f"the {fallback.backend} detector says {fallback.language} ({fallback.confidence:.2f})."
         )
         return fallback
 

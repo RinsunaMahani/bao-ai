@@ -41,6 +41,7 @@ venv/
 # not the page. tests/test_config.py now fails if any file the app loads
 # at runtime is excluded here.
 docs/*.md
+docs/*.pdf
 docs/training/
 eval/report.md
 benchmark_results.json

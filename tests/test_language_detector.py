@@ -339,3 +339,32 @@ def test_concurrent_detection_is_safe():
     for language in sentences:
         assert results[language][language] == 25, (
             f"{language}: {dict(results[language])}")
+
+
+def test_the_log_names_the_detector_that_actually_answered(caplog):
+    """The fallback log line said "pan-African model says Xitsonga" when
+    the keyword matcher had answered - seen in a live terminal for
+    "avuxeni". A log that credits the wrong component sends whoever reads
+    it to the wrong place.
+    """
+    import logging
+
+    from bao.services.language_detector import CompositeLanguageDetector, DetectionResult
+
+    class _Stub:
+        def __init__(self, language, confidence, backend):
+            self.result = DetectionResult(language=language, confidence=confidence, backend=backend)
+
+        def detect(self, text):
+            return self.result
+
+    composite = CompositeLanguageDetector(
+        primary=_Stub("siSwati", 0.35, "tflite"),
+        secondary=_Stub("Xitsonga", 0.75, "heuristic"),
+        primary_min=0.5, secondary_min=0.5, secondary_strong=1.01,
+    )
+    with caplog.at_level(logging.INFO, logger="bao"):
+        assert composite.detect("avuxeni").language == "Xitsonga"
+
+    assert "heuristic detector says Xitsonga" in caplog.text
+    assert "pan-African" not in caplog.text
