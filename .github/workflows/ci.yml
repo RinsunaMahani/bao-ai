@@ -66,6 +66,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
+          # pypdf, a few hundred KB, so the PDF upload limits are tested
+          # against real PDFs rather than skipped.
+          pip install -r requirements-pdf.txt
 
       # The on-device classifier is this project's central ML claim, so it
       # is exercised rather than skipped. ai-edge-litert is the standalone

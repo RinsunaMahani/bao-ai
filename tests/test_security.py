@@ -132,6 +132,26 @@ def test_reference_style_images_cannot_form_either():
     assert "![" not in rendered
 
 
+def test_crafted_output_cannot_make_rendering_slow():
+    """CodeQL py/polynomial-redos: with an unbounded pattern, each "!["
+    scanned to the end of the text, so this took time proportional to the
+    square of its length. Model output is steerable by a document, so the
+    input here is realistic for an attacker, not for a person.
+    """
+    import time
+
+    crafted = "![\\" * 20_000
+    started = time.perf_counter()
+    rendered = safe_markdown(crafted)
+    assert time.perf_counter() - started < 1.0
+    assert "![" not in rendered
+
+
+def test_an_image_past_the_bounds_still_cannot_load():
+    url = "https://evil.example/" + "a" * 5000
+    assert "![" not in safe_markdown(f"![x]({url})")
+
+
 def test_ordinary_markdown_is_unchanged():
     text = "**Bold**, a [link](https://www.gov.za), `code`, and a list:\n- one\n- two"
     assert safe_markdown(text) == text

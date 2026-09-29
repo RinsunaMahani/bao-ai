@@ -183,8 +183,17 @@ class SecurityGuardrails:
 # --- output ---------------------------------------------------------------
 
 # ![alt](url) and ![alt](url "title"), with an optional <...> around the url.
+#
+# Every repetition is bounded. Unbounded, `[^\]\n]*` let each "![" scan to
+# the end of the text when no "]" followed, so a reply of many "![" took
+# time proportional to the square of its length (CodeQL
+# py/polynomial-redos) - and the text is the model's output, which a
+# document can steer. Bounded, the work is linear. Nothing becomes unsafe
+# past the bounds: an image this misses is still escaped by the replace()
+# in safe_markdown.
 _MARKDOWN_IMAGE = re.compile(
-    r"!\[([^\]\n]*)\]\(\s*<?([^()\s<>]+)>?(?:\s+(?:\"[^\"\n]*\"|'[^'\n]*'|\([^()\n]*\)))?\s*\)"
+    r"!\[([^\]\n]{0,300})\]\(\s{0,20}<?([^()\s<>]{1,2048})>?"
+    r"(?:\s{1,20}(?:\"[^\"\n]{0,300}\"|'[^'\n]{0,300}'|\([^()\n]{0,300}\)))?\s{0,20}\)"
 )
 
 
