@@ -110,33 +110,30 @@ approximately.
 **Conversation memory is new, not renamed.**
 Both original Streamlit apps kept `st.session_state["messages"]`, but only
 to render chat bubbles — every Gemini call was still built from a single,
-memory-less prompt. `ai/memory.py::ConversationMemory` is fed back into
-`system_instruction` on every turn, so the assistant can now resolve a
+memory-less prompt. `ai/memory.py::ConversationMemory` is prepended to the
+prompt on every turn (the last six exchanges, each cut to 400 characters),
+so the assistant can now resolve a
 follow-up like "and in Afrikaans?" that refers to the previous answer. This
 is a genuinely new capability, not a rename of something that already
 worked.
 
-**A documented, known limitation: TF-IDF's threshold.**
-Testing this refactor against the real dataset surfaced a real precision
-issue: the query *"what is the capital of a fictional planet"* returns a
-KB match (`South Africa has three capital cities...`) at a similarity
-score of 0.186, just above the default 0.15 threshold — because both
-strings share enough common words ("the", "capital") for TF-IDF's cosine
-similarity to register a signal that has nothing to do with actual
-relevance. A later live test surfaced a more dramatic instance of the same
-issue: *"what is the airspeed velocity of an unladen swallow"* — a
-question sharing no topic with anything in the knowledge base — scores
-**0.443** against a fact about South Africa's currency, nearly 3x the
-threshold. Both are pinned as regression tests
-(`tests/test_knowledge.py`). This isn't a bug so much as the known ceiling
-of a keyword-overlap retrieval method on a small (52-row) corpus, where
-TF-IDF's inverse-document-frequency weighting has far less data to
-down-weight common words than it would in a larger collection; it's the
-concrete argument for the `knowledge/embeddings.py` interface being
-separate from `knowledge/vector_store.py` in the first place — swapping in
-a real sentence-embedding model later is a new class behind the same
-interface,
-not a rewrite.
+**A documented, known limitation: TF-IDF measures words, not meaning.**
+Testing against the real dataset first surfaced unrelated questions
+matching knowledge-base rows on shared function words ("what is the"),
+and later ones matching on a single shared phrase ("south africa") while
+the informative words were silently dropped. Two fixes closed those: a
+curated stop-word list in `knowledge/embeddings.py`, and the IDF-weighted
+coverage gate in `KnowledgeRetriever.query_coverage`, which refuses to
+serve a match when most of what the question asks about is outside the
+knowledge base's vocabulary. Both cases are pinned as regression tests
+(`tests/test_knowledge.py`, `tests/test_retrieval_coverage.py`). What
+remains is the opposite trade-off: rephrasings that share few words with
+the stored question are not matched (paraphrase recall 7/15). That is the
+concrete argument for keeping `knowledge/embeddings.py` separate from
+`knowledge/vector_store.py`: a different representation is a new class
+behind the same interface, not a rewrite. A general multilingual
+sentence-embedding model has been measured behind that interface and not
+adopted; the README gives the numbers.
 
 ## Sessions and concurrency
 
@@ -168,7 +165,9 @@ about a millisecond, while an interpreter per session would cost seconds
 and ~13 MB each. The output is copied inside the lock, because
 `get_tensor` returns a view onto the interpreter's own buffer. The voice
 models (MMS and the Coqui VITS) were put under the same concurrent load
-and did not need a lock, so they do not have one.
+and did not need a lock for inference, so they do not have one. Loading
+them does take a lock: two sessions asking for the same voice at once
+load one copy, where each copy is hundreds of megabytes.
 
 ## Sign language — removed
 
