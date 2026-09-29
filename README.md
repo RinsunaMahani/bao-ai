@@ -42,11 +42,8 @@
 | **Engineering** | A typed request pipeline, prompt-injection guardrails, conversation memory, speech output, Docker, and CI on every push |
 | **Evaluation** | Reproducible scripts for retrieval precision and recall, detector benchmarks, and gate sweeps, with limitations documented rather than hidden |
 
-📄 **Read the write-up:**
-[Technical documentation (PDF)](docs/Bao_AI_Technical_Documentation.pdf) ·
-[Testing and problem-resolution report (PDF)](docs/Bao_AI_Testing_and_Problem_Resolution_Report.pdf) ·
-[Technical report](docs/TECHNICAL_REPORT.md) · [Architecture](docs/ARCHITECTURE.md) ·
-[Development review log](REVIEW.md)
+📄 **Read the write-up:** [Technical report](docs/TECHNICAL_REPORT.md) ·
+[Architecture](docs/ARCHITECTURE.md) · [Development review log](REVIEW.md)
 
 ---
 
@@ -165,7 +162,7 @@ bao/
 data/               # african_data.csv — offline knowledge base
 models/             # language_classifier.tflite (default detector), pan-African bundle
 tests/              # unit, integration and AppTest UI tests
-docs/               # the two PDF reports, ARCHITECTURE.md, TECHNICAL_REPORT.md, TRANSLATION_REVIEW.md
+docs/               # ARCHITECTURE.md, TECHNICAL_REPORT.md, TRANSLATION_REVIEW.md
 docker/             # Dockerfile, docker-compose.yml
 .streamlit/         # config.toml: server security settings (localhost only, upload cap, …)
 .github/            # CI, CodeQL and Dependabot

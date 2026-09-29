@@ -1,8 +1,6 @@
 # Bao AI — Technical Report
 
-*Prepared for presentation, 30 August 2026; figures updated 29 September 2026.
-The full technical documentation and the testing and problem-resolution
-report are the two PDFs in this folder.*
+*Prepared for presentation, 30 August 2026; figures updated 29 September 2026.*
 
 ## 1. Overview
 
@@ -274,8 +272,7 @@ and prompt injection, all three language detectors, knowledge retrieval
 and its documented trade-offs, conversation memory, speech routing, the
 Gemini client's retries and limits, per-session isolation, the Docker
 build context, and the full request pipeline end to end, offline. CI runs
-them on Python 3.11 and 3.14 on every change. The companion testing report
-(PDF) lists every problem found and how it was fixed. The full pipeline was also driven through real, non-mocked
+them on Python 3.11 and 3.14 on every change. The full pipeline was also driven through real, non-mocked
 Streamlit sessions (`streamlit.testing.v1.AppTest`) for manual-equivalent
 test cases: an English knowledge-base question, an isiZulu question, an
 out-of-scope question with the system offline, and a document-upload
