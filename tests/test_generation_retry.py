@@ -76,6 +76,8 @@ def client(monkeypatch):
     # Set explicitly rather than inherited from config.toml: a deployment
     # changing its latency tuning must not change what these tests assert.
     c.thinking_level = "MINIMAL"
+    c.max_output_tokens = 4096
+    c.timeout_seconds = 60.0
     c.client = object()
     monkeypatch.setattr(GeminiClient, "_sleep_before_retry", lambda self, attempt: None)
     return c
@@ -350,6 +352,37 @@ def test_the_thinking_level_reaches_the_request(client):
     config = client._config("be brief", 0.3)
     assert config.thinking_config is not None
     assert config.thinking_config.thinking_level == "MINIMAL"
+
+
+def test_replies_have_a_length_ceiling_and_no_tool_calling(client):
+    """Bounded output, and no automatic function calling: no tools are
+    passed, so the model is given no agency this app does not use.
+    """
+    config = client._config(None, 0.3)
+    assert config.max_output_tokens == 4096
+    assert config.automatic_function_calling.disable is True
+
+
+def test_zero_leaves_the_length_to_the_model(client):
+    client.max_output_tokens = 0
+    assert client._config(None, 0.3).max_output_tokens is None
+
+
+def test_requests_time_out_rather_than_hang(monkeypatch):
+    """The SDK's default is no timeout, so a stalled connection held a
+    visitor's turn indefinitely.
+    """
+    import bao.ai.client as client_module
+
+    captured = {}
+
+    class _FakeSdkClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(client_module.genai, "Client", _FakeSdkClient)
+    GeminiClient(Settings(), api_key="not-a-real-key")
+    assert captured["http_options"].timeout == 60_000, "milliseconds"
 
 
 def test_default_leaves_the_model_to_decide(client):

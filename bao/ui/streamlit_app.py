@@ -13,7 +13,8 @@ import streamlit as st
 from bao.ai.orchestrator import Orchestrator
 from bao.bootstrap import build_orchestrator, for_session
 from bao.core.config import ASSISTANT_LOGO_PATH, LABELS, PAN_AFRICAN_LABELS, Settings
-from bao.knowledge.loader import extract_text_from_bytes, has_pdf_support
+from bao.core.security import escape_markdown, safe_markdown
+from bao.knowledge.loader import MAX_UPLOAD_BYTES, extract_text_from_bytes, has_pdf_support
 from bao.services.language_detector import CompositeLanguageDetector
 from bao.services.speech import (
     SPEAK_AUTO,
@@ -21,6 +22,7 @@ from bao.services.speech import (
     has_mms_backend,
     has_stt_backend,
     has_tts_backend,
+    preload_in_background,
     speech_input_language,
     transcribe_audio_bytes,
     tts_availability,
@@ -72,8 +74,13 @@ def _shared_pipeline():
     to construct, so rebuilding them per session would be waste.
 
     It must not be used directly — see init_system.
+
+    The voice libraries load on a background thread from here, so the page
+    draws without waiting ~20 seconds for torch; see preload_in_background.
     """
-    return build_orchestrator()
+    pipeline = build_orchestrator()
+    preload_in_background()
+    return pipeline
 
 
 def init_system():
@@ -367,8 +374,15 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
         )
         if uploaded_files and st.button("Index Uploaded Documents"):
             with st.spinner("Extracting text & updating index..."):
-                total_chunks, file_count, unreadable = 0, 0, []
+                total_chunks, file_count, unreadable, too_large = 0, 0, [], []
                 for file in uploaded_files:
+                    # Checked on the declared size, before the bytes are
+                    # read, so an oversized file costs nothing. The browser
+                    # enforces the same limit (server.maxUploadSize); this
+                    # holds if that setting is ever raised or bypassed.
+                    if file.size > MAX_UPLOAD_BYTES:
+                        too_large.append(file.name)
+                        continue
                     text = extract_text_from_bytes(file.getvalue(), file.name)
                     if text.strip():
                         total_chunks += orchestrator.document_retriever.add_document(file.name, text)
@@ -383,10 +397,15 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
                     st.success(f"Indexed {file_count} doc(s) into {total_chunks} chunks.")
                 if unreadable:
                     st.warning(
-                        f"No readable text in: {', '.join(unreadable)}."
+                        f"No readable text in: {', '.join(map(escape_markdown, unreadable))}."
                         + ("" if has_pdf_support() else
                            " Install `pypdf` to read PDFs.")
                         + " A scanned PDF is an image and has no text layer."
+                    )
+                if too_large:
+                    st.warning(
+                        f"Not indexed, larger than {MAX_UPLOAD_BYTES // 2**20} MB: "
+                        f"{', '.join(map(escape_markdown, too_large))}."
                     )
 
         # What the assistant can currently see, and a way to take it back.
@@ -401,7 +420,7 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
             )
             with st.expander("Documents Bao can read"):
                 for name in indexed:
-                    st.caption(f"📄 {name}")
+                    st.caption(f"📄 {escape_markdown(name)}")
                 st.caption(
                     "Session-scoped and never written to disk. They are "
                     "gone when you close the tab."
@@ -478,7 +497,10 @@ def render_message(msg: dict, assistant_avatar: str) -> None:
     with st.chat_message(msg["role"], avatar=avatar):
         if "lang_badge" in msg:
             st.caption(msg["lang_badge"])
-        st.markdown(msg["content"])
+        # Rendered through safe_markdown, never raw: a markdown image in a
+        # reply or an uploaded excerpt would make the browser fetch its URL
+        # with no click. See bao.core.security.safe_markdown.
+        st.markdown(safe_markdown(msg["content"]))
         if msg.get("audio"):
             st.audio(msg["audio"], format=msg.get("audio_mime", "audio/wav"))
 
@@ -524,7 +546,7 @@ def render_legacy_voice_input(settings: Settings, orchestrator: Orchestrator) ->
         if recorded is not None:
             transcription = _transcribe(settings, recorded)
             if transcription:
-                st.write(f"Transcribed: **{transcription}**")
+                st.write(f"Transcribed: **{escape_markdown(transcription)}**")
                 if st.button("Send voice transcription"):
                     _handle_turn(
                         settings, orchestrator, transcription, display_prefix="[Voice] ",
@@ -541,7 +563,7 @@ def _handle_turn(
 ) -> None:
     st.session_state.display_messages.append({"role": "user", "content": display_prefix + user_input})
     with st.chat_message("user", avatar=USER_AVATAR):
-        st.markdown(display_prefix + user_input)
+        st.markdown(safe_markdown(display_prefix + user_input))
 
     with st.chat_message("assistant", avatar=resolve_avatar(settings.assistant_avatar)):
         placeholder = st.empty()
@@ -555,7 +577,7 @@ def _handle_turn(
 
         def on_chunk(piece: str) -> None:
             streamed.append(piece)
-            placeholder.markdown("".join(streamed))
+            placeholder.markdown(safe_markdown("".join(streamed)))
 
         # want_speech=False on purpose: the text is shown the moment it's
         # ready, and the voice is synthesized afterwards (below). Leaving
@@ -578,7 +600,7 @@ def _handle_turn(
         badge_slot = st.empty()
         badge = _format_detection_badge(result)
         badge_slot.caption(badge)
-        st.markdown(result.text)
+        st.markdown(safe_markdown(result.text))
 
         # Text is on screen and the turn is usable from here on. Speech is
         # strictly additive, so it runs last and behind a toggle.
@@ -620,12 +642,13 @@ def render_chat_input(settings: Settings) -> tuple[str, str] | None:
     can_record = has_stt_backend() and _CHAT_INPUT_HAS_MIC
 
     if not can_record:
-        typed = st.chat_input("Type your message here...")
+        typed = st.chat_input("Type your message here...", max_chars=settings.max_query_length)
         return (typed, "") if typed else None
 
     submitted = st.chat_input(
         "Type a message, or use the mic to speak...",
         accept_audio=True,
+        max_chars=settings.max_query_length,
     )
     if not submitted:
         return None

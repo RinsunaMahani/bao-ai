@@ -5,7 +5,11 @@ services:
       dockerfile: docker/Dockerfile
     container_name: bao-ai
     ports:
-      - "8501:8501"
+      # This machine only. A bare "8501:8501" publishes on every network
+      # interface of the host, which puts the app, and the API key behind
+      # it, on the local network. To share it deliberately, change this to
+      # "8501:8501".
+      - "127.0.0.1:8501:8501"
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
@@ -17,8 +21,18 @@ services:
       - path: ../.env
         required: false
     volumes:
-      # Mount workspace subfolders for real-time development without rebuilding
-      - ../models:/app/models
-      - ../data:/app/data
-      - ../bao:/app/bao
+      # Mount workspace subfolders for real-time development without
+      # rebuilding. Read-only: the app never writes to them, and a
+      # compromised process must not be able to change the code or data
+      # the next run loads.
+      - ../models:/app/models:ro
+      - ../data:/app/data:ro
+      - ../bao:/app/bao:ro
+    # Standard container hardening: no privilege escalation (setuid
+    # binaries cannot gain rights), and no Linux capabilities, none of
+    # which a web app on an unprivileged port needs.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped

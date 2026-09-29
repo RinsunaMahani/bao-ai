@@ -20,7 +20,14 @@ try:
 except ImportError:
     pass
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+# A logger of its own, not logging.basicConfig(). This module used to call
+# basicConfig(level=INFO) on import, which configured logging for the
+# whole PROCESS: every Bao line printed twice (once as JSON, once plain),
+# and every third-party library's INFO messages reached the terminal. One
+# of those was Coqui TTS logging each sentence it spoke - the reply text,
+# which can quote the user - breaking this codebase's rule that user text
+# is never logged. Logging configuration belongs to bao.core.logging.
+_log = logging.getLogger("bao.config")
 
 # --- Module-Level Constants ---
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -134,14 +141,14 @@ class Settings:
 
     def _load(self) -> None:
         if not os.path.exists(self.config_path):
-            logging.warning(f"Configuration file not found at '{self.config_path}'. Using defaults.")
+            _log.warning(f"Configuration file not found at '{self.config_path}'. Using defaults.")
             return
         try:
             with open(self.config_path, "rb") as f:
                 self._raw = tomllib.load(f)
-            logging.info(f"Configuration loaded from {self.config_path}")
+            _log.info(f"Configuration loaded from {self.config_path}")
         except Exception as e:
-            logging.error(f"Error parsing {self.config_path}: {e}")
+            _log.error(f"Error parsing {self.config_path}: {e}")
 
     @property
     def gemini_model(self) -> str:
@@ -198,6 +205,29 @@ class Settings:
         a hang. 1 disables retrying.
         """
         return int(self._raw.get("model", {}).get("generation_max_attempts", 3))
+
+    @property
+    def generation_timeout_seconds(self) -> float:
+        """How long one Gemini request may take before it is abandoned.
+
+        The SDK's default is no timeout at all, so a connection that stalls
+        mid-answer held that visitor's turn forever. The SDK also sends
+        this to Google as X-Server-Timeout, so the server stops generating
+        too. The longest answers measured here finish in about 13 seconds.
+        """
+        return float(self._raw.get("model", {}).get("generation_timeout_seconds", 60))
+
+    @property
+    def max_output_tokens(self) -> int:
+        """Ceiling on one reply's length, in tokens. 0 leaves it to the model.
+
+        Unbounded, one request can ask for an essay many pages long: slow to
+        stream, slow to read aloud, and a way to spend a shared quota fast.
+        The longest reply measured was about 2,000 characters (roughly 500
+        tokens), so 4,096 leaves ample room. With a thinking_level above
+        MINIMAL the model's reasoning counts against the same budget.
+        """
+        return int(self._raw.get("model", {}).get("max_output_tokens", 4096))
 
     @property
     def similarity_threshold(self) -> float:
