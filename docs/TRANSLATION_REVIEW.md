@@ -1,7 +1,13 @@
 # Translation review — REQUIRED before these rows serve
 
-These 14 rows are **drafts**. They are excluded from retrieval until
-`Verified` is changed from `needs-review` to `verified`.
+These 14 rows are **drafts**. Until `Verified` is changed from
+`needs-review` to `verified`, a draft is served only when every number in
+it appears in the reviewed English row it translates, or in a reviewed
+English row of the same category. Every answer from a draft is labelled
+"translation not yet reviewed by a first-language speaker". A draft whose
+numbers do not check out is not served at all. The numbers check guards
+against a mistyped emergency number, not against wrong or unnatural
+wording, which is what this review is for.
 
 They were drafted by an AI assistant and have **not** been checked by a
 first-language speaker. They cover emergency and government services:
@@ -33,7 +39,7 @@ first-language speaker has approved. Approve row by row, not in bulk.
 - **Fact source:** SAPS national emergency line
 - Approved by: ______________  Date: __________
 
-### Healthcare — links to `en-039`
+### Healthcare — links to `en-021`
 
 - **Question:** nomboro ya ambulense
 - **Alt phrasings:** mpfuno wa rihanyu wa xihatla ambulense
@@ -49,7 +55,7 @@ first-language speaker has approved. Approve row by row, not in bulk.
 - **Fact source:** Childline South Africa
 - Approved by: ______________  Date: __________
 
-### Safety — links to `en-040`
+### Safety — links to `en-023`
 
 - **Question:** mpfuno wa madzolonga ya rimbewu
 - **Alt phrasings:** madzolonga ya le kaya mpfuno wa vavasati
@@ -91,7 +97,7 @@ first-language speaker has approved. Approve row by row, not in bulk.
 - **Fact source:** SAPS national emergency line
 - Approved by: ______________  Date: __________
 
-### Healthcare — links to `en-039`
+### Healthcare — links to `en-021`
 
 - **Question:** inombolo ye-ambulensi
 - **Alt phrasings:** usizo lwezempilo oluphuthumayo i-ambulensi
@@ -107,7 +113,7 @@ first-language speaker has approved. Approve row by row, not in bulk.
 - **Fact source:** Childline South Africa
 - Approved by: ______________  Date: __________
 
-### Safety — links to `en-040`
+### Safety — links to `en-023`
 
 - **Question:** usizo lodlame olubhekiswe kubulili
 - **Alt phrasings:** udlame lwasekhaya usizo lwabesifazane

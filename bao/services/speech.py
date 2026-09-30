@@ -681,6 +681,25 @@ def _normalize_waveform(waveform: np.ndarray) -> np.ndarray:
     return waveform
 
 
+# One level of brackets on one line, and bounded, so a stray "(" cannot
+# make the search scan the rest of a long reply.
+_BRACKETED = re.compile(r"[ \t]*\(([^()\n]{1,120})\)")
+
+
+def without_bracketed(text: str, skip: Callable[[str], bool]) -> str:
+    """`text` without the bracketed parts `skip` accepts, each leaving a
+    comma where it stood (a short pause, as a listener would expect) unless
+    punctuation or the end of a line already follows.
+    """
+    def replace(match: re.Match) -> str:
+        if not skip(match.group(1).strip()):
+            return match.group(0)
+        following = match.string[match.end():match.end() + 1]
+        return "" if following in ("", "\n") or following in ",.;:!?" else ","
+
+    return _BRACKETED.sub(replace, text)
+
+
 def clean_text_for_speech(text: str) -> str:
     """Strips markdown that would otherwise be read aloud as punctuation
     noise ("star star Cloud star star").

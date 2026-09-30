@@ -9,6 +9,7 @@ new class here, not a rewrite of retriever.py or vector_store.py.
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 
@@ -31,6 +32,33 @@ _DOMAIN_CONTENT_WORDS = frozenset({
 KNOWLEDGE_BASE_STOP_WORDS = (
     sorted(ENGLISH_STOP_WORDS - _DOMAIN_CONTENT_WORDS) if _HAS_SKLEARN else []
 )
+_STOP_WORD_SET = frozenset(KNOWLEDGE_BASE_STOP_WORDS)
+_WORD = re.compile(r"\w+")
+
+# Uploaded documents are matched on the first six letters of each content
+# word, so the forms of one word meet: "presentation", "presentations" and
+# "present"; "lecturer" and "lecture"; "submitted" and "submit".
+#
+# Exact words missed the case documents exist for. A short note a user
+# typed up - office hours, a presentation date, a deadline - was found by 1
+# of 8 plain questions about it: "how long is each presentation" scored
+# 0.000 against a note about "presentations". Six letters found the right
+# passage for all 8, mixed with a 5,000-word distractor. Character
+# n-grams also found all 8, but matched across unrelated words
+# ("photosynthesis" against "speech synthesis"); five letters confused
+# "office" with "official".
+DOCUMENT_STEM_LENGTH = 6
+
+
+def document_terms(text: str) -> list[str]:
+    """The terms an uploaded document is indexed and searched by: its
+    content words, each cut to DOCUMENT_STEM_LENGTH letters.
+    """
+    return [
+        word[:DOCUMENT_STEM_LENGTH]
+        for word in _WORD.findall(text.lower())
+        if word not in _STOP_WORD_SET
+    ]
 
 
 def has_sklearn_support() -> bool:
@@ -98,6 +126,25 @@ class TfidfEmbeddings(EmbeddingModel):
         if not self._is_fitted:
             raise RuntimeError("TfidfEmbeddings.fit() must be called before accessing fitted_matrix.")
         return self._matrix
+
+
+class DocumentTfidfEmbeddings(TfidfEmbeddings):
+    """TF-IDF over `document_terms`, for uploaded documents.
+
+    Kept apart from the knowledge base's vectorizer on purpose. The
+    knowledge base's threshold and coverage gate were measured on whole
+    words (see TfidfEmbeddings), and shortening its words would move every
+    one of those numbers. Documents are the opposite case: long prose the
+    user wrote in their own words, where a question rarely repeats the
+    exact form of a word. Sublinear term frequency stops a word repeated
+    through a long passage from outweighing the rest of the question.
+    """
+
+    def __init__(self):
+        if not _HAS_SKLEARN:
+            raise ImportError("scikit-learn is required for DocumentTfidfEmbeddings.")
+        self._vectorizer = TfidfVectorizer(analyzer=document_terms, sublinear_tf=True)
+        self._is_fitted = False
 
 
 def has_semantic_support() -> bool:

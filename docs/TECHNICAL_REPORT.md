@@ -67,7 +67,7 @@ pairs, matched by cosine similarity against a configurable threshold
 (default 0.25) plus a query-coverage gate (default 0.70; see 3.1.1).
 Chosen over a vector database or embedding model for two
 reasons: it requires no network call or GPU, and at the current knowledge
-base size (38 rows), the added complexity of an embedding pipeline isn't
+base size (52 rows), the added complexity of an embedding pipeline isn't
 justified by the data volume.
 
 ### 3.2 Language detection
@@ -155,7 +155,7 @@ reasoning are in "Accessibility and SASL" in `docs/ARCHITECTURE.md`.
 
 `python evaluate.py` queries the knowledge base with each entry's own
 question and checks whether that entry is the top match. Current result:
-100% (38/38). This measures whether the retrieval mechanism works at
+100% (52/52). This measures whether the retrieval mechanism works at
 all — not whether it generalizes to real user phrasing — and is presented
 here with that caveat, not as a headline accuracy claim.
 
@@ -198,9 +198,13 @@ answer.
 | System | Exact | Paraphrase | Negative (correctly rejected) |
 |---|---|---|---|
 | Similarity alone, threshold 0.25 | 15/15 | 12/15 | 20/40 |
-| **Shipped: similarity 0.25 and coverage 0.70** | **15/15** | **7/15** | **37/40** |
+| **Shipped: similarity 0.25 and coverage 0.70** | **15/15** | **7/15** | **39/40** |
 
-Shipped: precision 0.880, recall 0.733, F1 0.800.
+Shipped: precision 0.957, recall 0.733, F1 0.830. It was 37/40 and
+precision 0.880 until 30 September, when serving 14 translation drafts
+shifted the IDF weights and two unanswerable questions fell from exactly
+the 0.70 coverage gate to just under it: a side effect on the edge of the
+gate, not a designed improvement.
 
 TF-IDF measures word overlap, not meaning, and no similarity threshold
 alone separates paraphrases from unrelated questions. Two fixes closed
@@ -280,7 +284,7 @@ question — all verified to behave correctly with no exceptions.
 
 ## 6. Known limitations
 
-- **Small knowledge base** (38 entries): appropriate for a prototype
+- **Small knowledge base** (52 entries): appropriate for a prototype
   demonstrating an architecture, not a claim of comprehensive coverage.
   Several entries are intentionally campus-specific.
 - **Paraphrase recall** (7/15, Section 4.3) is the retrieval weakness;

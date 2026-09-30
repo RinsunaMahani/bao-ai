@@ -193,6 +193,22 @@ def _result(**overrides):
     return PipelineResult(**fields)
 
 
+def test_the_badge_says_when_a_translation_is_unreviewed():
+    from bao.ui.streamlit_app import _format_detection_badge
+
+    badge = _format_detection_badge(_result(source="knowledge_base", unreviewed_translation=True))
+    assert badge.endswith("· translation not yet reviewed by a first-language speaker")
+    assert "reviewed" not in _format_detection_badge(_result(source="knowledge_base"))
+
+
+def test_the_badge_says_when_uploaded_documents_were_used():
+    from bao.ui.streamlit_app import _format_detection_badge
+
+    badge = _format_detection_badge(_result(used_documents=True))
+    assert "source: gemini (with your uploaded documents)" in badge
+    assert "uploaded" not in _format_detection_badge(_result())
+
+
 def test_the_badge_says_when_the_message_overruled_the_sidebar():
     from bao.ui.streamlit_app import _format_detection_badge
 

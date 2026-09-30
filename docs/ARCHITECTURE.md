@@ -69,6 +69,14 @@ curated facts get wiped every time someone uploads a PDF, or uploaded
 documents get treated as permanent verified facts. Keeping them separate
 costs one extra class and avoids that entire category of bug.
 
+They also match differently. Documents are matched on the first six
+letters of each word, so "presentation" finds "presentations"; exact words
+found a short uploaded note for only 1 of 8 plain questions about it. And
+uploads of up to 25,000 words in total go to Gemini whole rather than as
+matched passages, so a question in isiZulu about an English document is
+answered from it. Matching still picks the passages for longer uploads and
+for the offline excerpt.
+
 **A pluggable language detector, not two competing ones.**
 The original code had a keyword-heuristic detector and a TFLite/Keras
 classifier that were never actually interchangeable — the classifier
@@ -299,7 +307,7 @@ What happens at each stage, in this deployment:
 | Stage | 11 South African | 14 pan-African |
 |---|---|---|
 | Detection | yes | yes — 24 of the 25 route correctly end to end; Luganda is detected as Xitsonga |
-| Verified knowledge-base answer | yes — 38 rows served, 14 more awaiting a first-language speaker's review | **none — zero rows** |
+| Verified knowledge-base answer | yes — 52 rows served; 14 of them are isiZulu and Xitsonga translations still awaiting a first-language speaker's review, served because their numbers check out against the reviewed English rows, and labelled as unreviewed | **none — zero rows** |
 | Generated answer | yes | yes (Gemini, online only) |
 | Voice | 11 of 11 (4 on the code defaults; the other 7 need the opt-in SA VITS model) | 12 of 14 — MMS, with Microsoft neural voices for Amharic, French, Somali and Swahili; **none for Igbo or Lingala** |
 

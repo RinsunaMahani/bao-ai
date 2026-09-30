@@ -831,3 +831,168 @@ def test_answers_do_not_depend_on_the_audio_stack(monkeypatch):
     spoken = silent_session.speak(without_audio[0])
     assert spoken.audio is None
     assert spoken.speech_error, "a missing voice must be explained, not silent"
+
+
+# --- Uploaded documents reach the model ----------------------------------------
+
+NOTE = (
+    "The MATH301 project presentations take place on 14 October 2026. "
+    "Each student has 15 minutes: 10 minutes to present and 5 minutes for questions."
+)
+
+
+class _PromptRecorder:
+    """A Gemini stand-in that keeps every prompt it is sent."""
+
+    def __init__(self):
+        self.prompts: list[str] = []
+
+    def is_available(self):
+        return True
+
+    def generate(self, prompt, system_instruction=None, temperature=0.3):
+        self.prompts.append(prompt)
+        return "Umfundi ngamunye unemizuzu engu-15."
+
+
+class _FixedDetector:
+    def __init__(self, language="English", confidence=0.99, per_text=None):
+        self.language, self.confidence = language, confidence
+        self.per_text = per_text or {}
+
+    def detect(self, text):
+        language, confidence = self.per_text.get(text, (self.language, self.confidence))
+        return DetectionResult(language=language, confidence=confidence, backend="stub")
+
+
+def _session(detector=None, documents=None, retriever=None, **kwargs):
+    from bao.ai.memory import ConversationMemory
+
+    client = _PromptRecorder()
+    orch = Orchestrator(
+        security=SecurityGuardrails(),
+        language_detector=detector or _FixedDetector(),
+        knowledge_retriever=retriever,
+        gemini_client=client,
+        memory=ConversationMemory(),
+        document_retriever=documents,
+        **kwargs,
+    )
+    return orch, client
+
+
+def test_a_question_in_isizulu_about_an_english_note_gets_the_note():
+    """Matching words can never connect "isethulo sithatha isikhathi
+    esingakanani" to an English note about presentations. A short upload
+    goes to the model whole, so it can.
+    """
+    documents = DocumentRetriever()
+    documents.add_document("lecturer_note.txt", NOTE)
+    orch, client = _session(_FixedDetector("isiZulu"), documents)
+
+    result = orch.handle("isethulo ngasinye sithatha isikhathi esingakanani?")
+
+    assert result.source == "gemini" and result.used_documents
+    assert "5 minutes for questions" in client.prompts[-1]
+    assert "[Document: lecturer_note.txt]" in client.prompts[-1]
+
+
+def test_long_uploads_send_the_matching_passages_not_everything():
+    documents = DocumentRetriever(chunk_size=20, chunk_overlap=0)
+    documents.add_document("note.txt", NOTE)
+    documents.add_document("other.txt", " ".join(["The library opens at eight on weekdays."] * 30))
+    orch, client = _session(documents=documents, full_document_words=10)
+
+    result = orch.handle("how long is each presentation")
+
+    assert result.used_documents
+    assert "15 minutes" in client.prompts[-1]
+    assert client.prompts[-1].count("library") < 30, "not the whole upload"
+
+
+def test_no_uploads_means_no_document_claim():
+    orch, client = _session(documents=DocumentRetriever())
+    result = orch.handle("what is photosynthesis")
+    assert result.source == "gemini" and not result.used_documents
+    assert "untrusted_document" not in client.prompts[-1]
+
+
+# --- Unreviewed translations are labelled -------------------------------------
+
+def test_an_unreviewed_translation_is_flagged_on_the_result(tmp_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    path = tmp_path / "kb.csv"
+    path.write_text(
+        "Category,Question,Answer,Language,Canonical_Id,Verified\n"
+        "Safety,police number,Call the police on 10111.,English,x-1,verified\n"
+        "Safety,inombolo yamaphoyisa,Shayela amaphoyisa ku-10111.,isiZulu,x-1,needs-review\n",
+        encoding="utf-8",
+    )
+    retriever = KnowledgeRetriever(data_path=str(path))
+    orch = Orchestrator(
+        SecurityGuardrails(), _FixedDetector("isiZulu"), retriever, GeminiClient(Settings())
+    )
+
+    zulu = orch.handle("inombolo yamaphoyisa", force_offline=True)
+    assert zulu.source == "knowledge_base" and zulu.unreviewed_translation
+
+    english = orch.handle("police number", force_offline=True, language_override="English")
+    assert english.source == "knowledge_base" and not english.unreviewed_translation
+
+
+# --- The voice skips English glosses in brackets ------------------------------
+
+GLOSSED = (
+    "Ukufaka isicelo se-NSFAS (National Student Financial Aid Scheme) kulula. "
+    "Izinto ozozidinga (Required Documents): ubufakazi beholo (pay slip), "
+    "isithombe (PDF noma isithombe esicacile), bese uchofoza u-Submit (Submit). "
+    "Shayela u-10111 (10111)."
+)
+
+
+def _speak(monkeypatch, spoken_language, text=GLOSSED):
+    import bao.ai.orchestrator as orchestrator_module
+    from bao.ai.orchestrator import PipelineResult
+
+    said = {}
+
+    def fake_synthesize(text, language, **kwargs):
+        said["text"] = text
+        return None
+
+    monkeypatch.setattr(orchestrator_module, "resolve_voice_language",
+                        lambda language, **kwargs: (spoken_language, None))
+    monkeypatch.setattr(orchestrator_module, "synthesize_speech", fake_synthesize)
+    detector = _FixedDetector(per_text={
+        "National Student Financial Aid Scheme": ("English", 0.86),
+        "Required Documents": ("English", 1.0),
+        "pay slip": ("isiNdebele", 0.16),
+        "PDF noma isithombe esicacile": ("isiZulu", 0.98),
+        "Submit": ("English", 0.97),
+    })
+    orch, _ = _session(detector)
+    result = PipelineResult(
+        text=text, detected_language="isiZulu", confidence=0.97, detection_backend="stub",
+        source="gemini", latency_ms=1.0, reply_language="isiZulu", text_language=spoken_language,
+    )
+    orch.speak(result)
+    return said["text"], result
+
+
+def test_the_voice_skips_english_glosses_and_keeps_the_rest(monkeypatch):
+    """Live, an isiZulu answer about NSFAS had eleven English glosses in
+    brackets, each read with isiZulu pronunciation."""
+    said, result = _speak(monkeypatch, "isiZulu")
+
+    assert said == (
+        "Ukufaka isicelo se-NSFAS, kulula. "
+        "Izinto ozozidinga: ubufakazi beholo, "
+        "isithombe (PDF noma isithombe esicacile), bese uchofoza u-Submit. "
+        "Shayela u-10111 (10111)."
+    )
+    assert result.text == GLOSSED, "the screen keeps every gloss"
+
+
+def test_an_english_voice_reads_the_brackets(monkeypatch):
+    said, _ = _speak(monkeypatch, "English")
+    assert said == GLOSSED

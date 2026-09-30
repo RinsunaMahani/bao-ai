@@ -82,6 +82,8 @@ def _reply(orchestrator, text: str) -> str:
     result = orchestrator.handle(text, want_speech=True)
     shown = result.reply_language or result.detected_language
     print(f"[{shown} · {result.confidence * 100:.1f}%] {result.text}")
+    if result.unreviewed_translation:
+        print("[Translation not yet reviewed by a first-language speaker]")
     # The web app shows these; the console printed neither, so a missing
     # or substituted voice was silent here in both senses.
     if result.voice_note:
