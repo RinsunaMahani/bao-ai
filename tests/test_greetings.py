@@ -261,10 +261,11 @@ def test_a_detected_language_does_not_swap_the_greeting(orchestrator_online):
     assert result.text == "Avuxeni! Ndzi nga ku pfuna njhani?"
 
 
-def test_an_unreviewed_translation_is_never_served_as_a_counterpart(knowledge):
-    """The isiZulu and Xitsonga emergency-number rows share Canonical_Id
-    en-020 with the English one but are still needs-review. counterpart()
-    must not become a side door around that gate.
+def test_an_unreviewed_translation_is_served_as_a_counterpart_only_marked(knowledge):
+    """The isiZulu police row shares Canonical_Id en-020 with the English
+    one and is still needs-review. Its numbers check out, so counterpart()
+    may return it, but always carrying reviewed=False: it must not become
+    a side door that serves an unchecked translation as a checked one.
     """
     settings = Settings()
     english = knowledge[
@@ -275,9 +276,7 @@ def test_an_unreviewed_translation_is_never_served_as_a_counterpart(knowledge):
 
     served = KnowledgeRetriever(data_path=settings.knowledge_base_path)
     fact = served.lookup(question)
-    assert fact is not None and fact.canonical_id == "en-020"
-    assert served.counterpart(fact, "isiZulu") is None
-
-    everything = KnowledgeRetriever(data_path=settings.knowledge_base_path, include_unreviewed=True)
-    zulu = everything.counterpart(everything.lookup(question), "isiZulu")
+    assert fact is not None and fact.canonical_id == "en-020" and fact.reviewed
+    zulu = served.counterpart(fact, "isiZulu")
     assert zulu is not None and zulu.language == "isiZulu" and zulu.canonical_id == "en-020"
+    assert zulu.reviewed is False

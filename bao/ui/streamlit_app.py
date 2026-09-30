@@ -483,8 +483,14 @@ def _format_detection_badge(result) -> str:
     ):
         detection_part += f" — this answer is in {result.text_language}"
     badge = f"{detection_part} · source: {result.source}"
+    if result.used_documents:
+        badge += " (with your uploaded documents)"
     if result.fallback_model:
         badge += f" ({result.fallback_model}, because the main model was busy)"
+    # Served because its numbers check out against the reviewed English
+    # rows, but its wording has not been checked. The reader is told.
+    if result.unreviewed_translation:
+        badge += " · translation not yet reviewed by a first-language speaker"
     # Cross-lingual turns ("explain X in Xitsonga") answer in a different
     # language from the question. Showing it makes a wrong voice obvious.
     if result.speech_language and result.speech_language != result.detected_language:

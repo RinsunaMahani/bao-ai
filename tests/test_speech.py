@@ -80,6 +80,22 @@ def test_markdown_is_stripped_so_it_is_not_read_aloud():
         assert token not in cleaned
 
 
+@pytest.mark.parametrize("text, expected", [
+    ("se-NSFAS (English) kulula.", "se-NSFAS, kulula."),         # a pause where it stood
+    ("Izinto (English): uhlu", "Izinto: uhlu"),                  # punctuation already pauses
+    ("ku-inthanethi (English).", "ku-inthanethi."),
+    ("ekugcineni (English)\nOlandelayo", "ekugcineni\nOlandelayo"),
+    ("ekugcineni (English)", "ekugcineni"),
+    ("gcina (kept) lokhu", "gcina (kept) lokhu"),
+    ("(a (nested) one) stays", "(a, one) stays"),                # only the inner level
+    ("an unclosed ( bracket", "an unclosed ( bracket"),
+])
+def test_bracketed_text_can_be_left_out_of_speech(text, expected):
+    from bao.services.speech import without_bracketed
+
+    assert without_bracketed(text, lambda inner: inner != "kept") == expected
+
+
 def test_sentence_terminators_are_preserved():
     """Both backends use punctuation for prosody. The earlier splitter
     discarded it, which flattened long replies into a monotone.

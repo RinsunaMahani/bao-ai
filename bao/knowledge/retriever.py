@@ -40,6 +40,7 @@ from bao.core.logging import get_logger
 from bao.core.security import strip_invisible
 from bao.knowledge.embeddings import (
     KNOWLEDGE_BASE_STOP_WORDS,
+    DocumentTfidfEmbeddings,
     EmbeddingModel,
     TfidfEmbeddings,
     has_sklearn_support,
@@ -84,6 +85,67 @@ class KnowledgeFact:
     # Canonical_Id, or for greetings, the category (see counterpart()).
     category: str = ""
     canonical_id: str = ""
+    # False for a translation still awaiting a first-language speaker's
+    # review, which the interface must say (see KnowledgeRetriever).
+    reviewed: bool = True
+
+
+# A number as it is written in an answer: digits, with the single spaces,
+# stars and hashes of phone numbers and USSD codes ("08000 67327",
+# "*120*67327#"). Spaces are dropped before comparing.
+_NUMBER = re.compile(r"[*#+]?\d(?:[\d*#]| (?=\d))*")
+
+
+def dialable_numbers(text: str) -> list[str]:
+    """Every number in `text`, spaces removed, sorted for comparison."""
+    return sorted(match.replace(" ", "") for match in _NUMBER.findall(text or ""))
+
+
+def _column(df, name: str) -> list[str] | None:
+    if name not in df.columns:
+        return None
+    return df[name].fillna("").astype(str).str.strip().tolist()
+
+
+def _needs_review_flags(df) -> list[bool]:
+    status = _column(df, "Verified")
+    return [False] * len(df) if status is None else [s.lower() == "needs-review" for s in status]
+
+
+def _numbers_check_out(df, unreviewed: list[bool]) -> list[bool]:
+    """Per row: True when a reviewed English row shares its Canonical_Id,
+    and every number in it appears in that row or in a reviewed English
+    row of the same category.
+
+    Every number, not the same numbers: a draft that leaves one out (the
+    SASSA drafts omit the R370 grant amount) cannot send anyone to a wrong
+    number. The category widens the check for the one case in the data
+    where a draft adds a number: the police drafts add "or 112 from any
+    cellphone", which the police row lacks and the reviewed general
+    emergency row states.
+    """
+    ids, languages, answers, categories = (
+        _column(df, name) for name in ("Canonical_Id", "Language", "Answer", "Category")
+    )
+    if ids is None or languages is None or answers is None:
+        return [False] * len(df)
+    ids = [key.lower() for key in ids]
+    categories = [c.lower() for c in categories] if categories is not None else [""] * len(df)
+    by_id: dict[str, set[str]] = {}
+    by_category: dict[str, set[str]] = {}
+    for key, language, answer, category, draft in zip(ids, languages, answers, categories, unreviewed, strict=True):
+        if language.lower() != "english" or draft:
+            continue
+        numbers = set(dialable_numbers(answer))
+        if key:
+            by_id.setdefault(key, set()).update(numbers)
+        if category:
+            by_category.setdefault(category, set()).update(numbers)
+    return [
+        key in by_id
+        and set(dialable_numbers(answer)) <= by_id[key] | by_category.get(category, set())
+        for key, answer, category in zip(ids, answers, categories, strict=True)
+    ]
 
 
 class KnowledgeRetriever:
@@ -120,22 +182,30 @@ class KnowledgeRetriever:
             logger.warning(f"Knowledge base unavailable: {e}")
             return
 
-        # Rows flagged `needs-review` are drafts awaiting a first-language
-        # speaker's sign-off and are excluded from the index entirely.
-        # Serving an unreviewed translation of an emergency number under a
-        # "verified" label is strictly worse than returning nothing and
-        # falling through to generation: the user cannot tell that the
-        # answer was never checked, and the failure is silent. Set
-        # include_unreviewed=True only to measure what the reviewed rows
-        # WOULD do once approved.
-        if not include_unreviewed and "Verified" in df.columns:
-            pending = int((df["Verified"] == "needs-review").sum())
-            if pending:
-                df = df[df["Verified"] != "needs-review"].reset_index(drop=True)
-                logger.info(
-                    f"Excluded {pending} needs-review rows from retrieval. "
-                    f"They serve once Verified is set."
-                )
+        # Rows flagged `needs-review` are translations awaiting a
+        # first-language speaker's sign-off. The danger in serving one is a
+        # wrong number: an emergency line mistyped in a translation nobody
+        # checked, under a label saying it was. So a draft is served only
+        # when its numbers check out against the reviewed English rows (see
+        # _numbers_check_out), and it is marked unreviewed so the interface
+        # says so. Drafts that cannot be checked that way stay out.
+        #
+        # They were all excluded until live use showed the cost: isiZulu
+        # questions typed word for word from the CSV ("inombolo
+        # yamaphoyisa") went to Gemini, and offline got no answer at all.
+        # include_unreviewed=True serves every draft, still marked.
+        pending = _needs_review_flags(df)
+        df = df.assign(_unreviewed=pending)
+        if any(pending) and not include_unreviewed:
+            checked = _numbers_check_out(df, pending)
+            keep = [not draft or ok for draft, ok in zip(pending, checked, strict=True)]
+            left_out = keep.count(False)
+            df = df[keep].reset_index(drop=True)
+            logger.info(
+                f"Serving {sum(pending) - left_out} unreviewed translations whose "
+                f"numbers check out against the reviewed English rows; left out "
+                f"{left_out} that do not."
+            )
 
         corpus = df["search_corpus"].fillna("").astype(str).tolist()
         if not any(text.strip() for text in corpus):
@@ -422,6 +492,7 @@ class KnowledgeRetriever:
             score=score,
             category=column("Category"),
             canonical_id=column("Canonical_Id"),
+            reviewed=not bool(row["_unreviewed"]) if "_unreviewed" in self._df.columns else True,
         )
 
     def counterpart(self, fact: KnowledgeFact, language: str) -> KnowledgeFact | None:
@@ -434,8 +505,9 @@ class KnowledgeRetriever:
         visitor who has chosen Sesotho and types "avuxeni" should be greeted
         in Sesotho, not handed the Xitsonga greeting.
 
-        Only served rows are searched, so a translation still marked
-        needs-review is never returned by this route either.
+        Only served rows are searched, so an unreviewed translation comes
+        back by this route only if it would be served anyway, and it
+        carries reviewed=False here too.
         """
         if not self.is_initialized or not language or "Language" not in self._df.columns:
             return None
@@ -481,6 +553,8 @@ class DocumentRetriever:
         self.chunk_overlap = chunk_overlap
         self.max_chunks = max_chunks
         self._chunks: list = []
+        # Each document's indexed text, in upload order, for full_text().
+        self._texts: dict[str, str] = {}
         self._store: VectorStore | None = None
 
     def add_document(self, doc_id: str, content: str) -> int:
@@ -547,8 +621,30 @@ class DocumentRetriever:
             logger.info(f"Re-indexed {doc_id}: replaced {replaced} existing chunk(s).")
 
         self._chunks = kept[:position] + new_chunks + kept[position:]
+        # Assigning to an existing key keeps its place, as the chunks do.
+        self._texts[doc_id] = content
         self._rebuild()
         return len(new_chunks)
+
+    def full_text(self, max_words: int) -> str:
+        """Every indexed document in full, labeled, when together they come
+        to at most `max_words` words; otherwise "".
+
+        For generation. Searching for the passages that match a question
+        is how documents too long for a prompt are handled, and it failed
+        the short ones people actually upload. A note the user typed up
+        themselves was found by 1 of 8 plain questions about it, and a
+        question asked in isiZulu about an English note can never match it
+        word for word. A document this short fits in the prompt whole, and
+        then the model reads all of it, in whatever language it is written.
+        """
+        if not self._texts or max_words <= 0:
+            return ""
+        if sum(len(text.split()) for text in self._texts.values()) > max_words:
+            return ""
+        return "\n\n".join(
+            f"[Document: {name}]\n{text}" for name, text in self._texts.items()
+        )
 
     @property
     def sources(self) -> list[str]:
@@ -568,14 +664,21 @@ class DocumentRetriever:
         earlier chunks scored against a stale vocabulary.
         """
         try:
-            store = VectorStore(TfidfEmbeddings())
+            store = VectorStore(DocumentTfidfEmbeddings())
             store.build([c.content for c in self._chunks])
             self._store = store
         except (ValueError, ImportError) as e:
             logger.warning(f"Could not index uploaded documents: {e}")
             self._store = None
 
-    def search(self, query: str, top_k: int = 2, min_score: float = 0.15) -> str:
+    # Measured on the note above plus a 5,000-word distractor: the right
+    # passage scored 0.110 to 0.284 for all 8 questions, and 4 of 6
+    # unrelated ones scored exactly 0. The other two shared real words
+    # with the distractor ("south africa", "today") and scored 0.105 and
+    # 0.169, which no word-based threshold can separate from a match.
+    MIN_SCORE = 0.10
+
+    def search(self, query: str, top_k: int = 2, min_score: float = MIN_SCORE) -> str:
         """Returns matching excerpts as labeled text, or "" if nothing
         clears `min_score`. Returns a string rather than objects because
         every caller feeds it straight into a prompt or displays it.
@@ -598,6 +701,7 @@ class DocumentRetriever:
 
     def clear(self) -> None:
         self._chunks = []
+        self._texts = {}
         self._store = None
 
     def __len__(self) -> int:

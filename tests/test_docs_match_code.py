@@ -30,18 +30,18 @@ DOCS = [REPO / "README.md", *(REPO / "docs").glob("*.md")]
 def knowledge_rows():
     """Both counts are legitimate figures for the docs to quote.
 
-    The knowledge base now carries draft rows flagged `needs-review`,
-    which are authored but deliberately excluded from the retrieval index
-    until a first-language speaker signs them off. So "the size of the
-    knowledge base" is two numbers: what has been written (all rows), and
-    what actually serves (reviewed rows). A document quoting either is
+    The knowledge base carries draft rows flagged `needs-review`, and a
+    draft serves only if its numbers check out (see KnowledgeRetriever).
+    So "the size of the knowledge base" is two numbers: what has been
+    written (all rows), and what actually serves, counted by the retriever
+    itself rather than re-derived here. A document quoting either is
     accurate; a document quoting neither is stale, which is what this
     test is for.
     """
-    df = pd.read_csv(Settings().knowledge_base_path)
-    authored = len(df)
-    served = int((df["Verified"] != "needs-review").sum()) if "Verified" in df else authored
-    return {authored, served}
+    from bao.knowledge.retriever import KnowledgeRetriever
+
+    path = Settings().knowledge_base_path
+    return {len(pd.read_csv(path)), len(KnowledgeRetriever(data_path=path))}
 
 
 def test_no_document_states_a_stale_row_count(knowledge_rows):

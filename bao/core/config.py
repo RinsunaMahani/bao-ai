@@ -243,6 +243,14 @@ class Settings:
         return self._raw.get("retrieval", {}).get("min_query_coverage", 0.7)
 
     @property
+    def full_document_words(self) -> int:
+        """Uploads up to this many words in total go to the model whole;
+        longer ones as the passages that best match the question. 0 always
+        sends passages. See DocumentRetriever.full_text.
+        """
+        return int(self._raw.get("retrieval", {}).get("full_document_words", 25_000))
+
+    @property
     def max_query_length(self) -> int:
         return self._raw.get("application", {}).get("max_query_length", 500)
 

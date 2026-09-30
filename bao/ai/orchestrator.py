@@ -73,7 +73,7 @@ from bao.services.language_detector import (
     named_target_language,
 )
 from bao.services.offline import should_use_offline
-from bao.services.speech import resolve_voice_language, synthesize_speech
+from bao.services.speech import resolve_voice_language, synthesize_speech, without_bracketed
 from bao.services.translation import translate_fact
 
 logger = get_logger(__name__)
@@ -140,6 +140,11 @@ class PipelineResult:
     # The backup model that answered, when the main one was busy. None when
     # the main model answered or no model was involved.
     fallback_model: str | None = None
+    # A knowledge-base answer served from a translation that no
+    # first-language speaker has reviewed yet. Shown with the answer.
+    unreviewed_translation: bool = False
+    # The user's uploaded documents were given to the model for this answer.
+    used_documents: bool = False
 
 
 class Orchestrator:
@@ -159,6 +164,7 @@ class Orchestrator:
         voice_fallback_english: bool = False,
         min_detection_confidence: float = 0.0,
         max_speech_characters: int = 0,
+        full_document_words: int = 25_000,
     ):
         self.security = security
         self.language_detector = language_detector
@@ -179,6 +185,9 @@ class Orchestrator:
         self.voice_fallback_english = voice_fallback_english
         self.min_detection_confidence = min_detection_confidence
         self.max_speech_characters = max_speech_characters
+        # Up to this many words of uploads go to the model whole rather
+        # than as matched excerpts. See DocumentRetriever.full_text.
+        self.full_document_words = full_document_words
 
     def handle(
         self,
@@ -355,6 +364,7 @@ class Orchestrator:
             else:
                 text, source, text_language = OFFLINE_NO_MATCH_MESSAGE, "offline_fallback", "English"
         else:
+            doc_context = self._documents_for_generation(user_input) or doc_context
             text, source, text_language = self._respond_with_gemini(
                 user_input, reply_language, doc_context, on_chunk=on_chunk
             )
@@ -381,6 +391,11 @@ class Orchestrator:
             language_was_requested=language_was_requested,
             text_language=text_language,
             fallback_model=fallback_model,
+            unreviewed_translation=(
+                source == "knowledge_base" and fact is not None
+                and not getattr(fact, "reviewed", True)
+            ),
+            used_documents=source == "gemini" and bool(doc_context),
         )
 
         # 7. Speech (optional, and deliberately last)
@@ -428,10 +443,19 @@ class Orchestrator:
             result.stage_timings["speech"] = self._elapsed_ms(stage)
             return result
 
+        # Glosses like "(pay slip)" or "(Submit)" help a reader and are the
+        # reverse for a listener: an isiZulu voice reads English with
+        # isiZulu pronunciation. The screen keeps them; the voice skips them.
+        text = result.text
+        if spoken_language.strip().lower() != "english":
+            text = without_bracketed(
+                text, lambda inner: self._is_gloss_to_skip(inner, spoken_language)
+            )
+
         errors: list[str] = []
         trims: list[str] = []
         speech = synthesize_speech(
-            result.text,
+            text,
             spoken_language,
             mms_codes=self.tts_codes,
             speaking_rate=self.tts_speaking_rate,
@@ -458,6 +482,29 @@ class Orchestrator:
     # 0.20 and a marker-word match at 0.75, so this threshold sits between
     # them on purpose.
     SPEECH_LANGUAGE_MIN_CONFIDENCE = 0.5
+
+    def _is_gloss_to_skip(self, inner: str, spoken_language: str) -> bool:
+        """Whether the voice should skip this bracketed text: it reads as
+        English, or as no language confidently, and not as the language
+        being spoken.
+
+        On the brackets of a live isiZulu answer this skipped all eleven
+        English ones ("pay slip" scored isiNdebele at 16%, "Upload" siSwati
+        at 35%) and kept "(PDF noma isithombe esicacile)", isiZulu at 98%.
+        Numbers are always kept: "(10111)" is information in any voice.
+        """
+        if any(ch.isdigit() for ch in inner):
+            return False
+        try:
+            detection = self.language_detector.detect(inner)
+        except Exception:
+            return False
+        if detection.language.strip().lower() == spoken_language.strip().lower():
+            return False
+        return (
+            detection.language == "English"
+            or detection.confidence < self.SPEECH_LANGUAGE_MIN_CONFIDENCE
+        )
 
     # How much of a reply to read when deciding which voice speaks it.
     #
@@ -587,6 +634,24 @@ class Orchestrator:
 
         text = translate_fact(fact.answer, language, self.gemini_client)
         return text, "knowledge_base", (fact.language if text == fact.answer else None)
+
+    # For uploads too long to send whole: more passages, and weaker matches,
+    # than the offline excerpt shows. A passage the model did not need costs
+    # a few hundred words of prompt; one it needed and did not get is a
+    # wrong answer.
+    GENERATION_PASSAGES = 4
+    GENERATION_MIN_SCORE = 0.05
+
+    def _documents_for_generation(self, user_input: str) -> str:
+        """The uploads to give the model: whole when they are short enough,
+        otherwise the passages that best match the question.
+        """
+        documents = self.document_retriever
+        if documents is None:
+            return ""
+        return documents.full_text(self.full_document_words) or documents.search(
+            user_input, top_k=self.GENERATION_PASSAGES, min_score=self.GENERATION_MIN_SCORE
+        )
 
     def _respond_with_gemini(
         self,

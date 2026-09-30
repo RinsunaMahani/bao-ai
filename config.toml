@@ -73,6 +73,11 @@ default_similarity_threshold = 0.25
 # labelled set: 0.70 cuts false positives from 22 to 4. Lower it for
 # more KB coverage at the cost of more confidently-wrong answers.
 min_query_coverage = 0.7
+# Uploaded documents up to this many words in total (about 50 pages) are
+# given to Gemini whole, so any question about them can be answered, in any
+# language. Longer uploads go as the passages that best match the question.
+# 0 always sends passages.
+full_document_words = 25000
 
 [application]
 max_query_length = 500

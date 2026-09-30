@@ -318,8 +318,8 @@ Current, reproducible result on the checked-in `data/african_data.csv`:
 
 ```
 Knowledge base rows evaluated: 52
-Top-1 self-retrieval accuracy: 100.0% (38/38 reviewed rows)
-Mean similarity on correct matches: 0.695
+Top-1 self-retrieval accuracy: 100.0% (52/52)
+Mean similarity on correct matches: 0.698
 ```
 
 `benchmark_bao.py` also runs a head-to-head language-detection comparison
@@ -407,12 +407,19 @@ threshold 0.25 and coverage 0.7:
 
 | | Exact | Paraphrase | Negative (correctly rejected) |
 |---|---|---|---|
-| **Shipped** | **15/15** | **7/15** | **37/40** |
+| **Shipped** | **15/15** | **7/15** | **39/40** |
 
-Precision 0.880, recall 0.733, **F1 0.800**.
+Precision 0.957, recall 0.733, **F1 0.830**.
+
+Until 30 September this row read 37/40, precision 0.880, F1 0.800. Serving the
+14 translation drafts (see `docs/TRANSLATION_REVIEW.md`) added rows to the
+index, which shifted the IDF weights, and two unanswerable questions ("when
+did south africa become a democracy", "how do i register a company in south
+africa") moved from exactly the 0.70 coverage gate to just under it. That is
+a side effect on the edge of the gate, not a designed improvement.
 
 **The honest finding: the coverage gate works, and paraphrase recall is
-what it costs.** The gate takes negative rejection from 20/40 to 37/40 —
+what it costs.** The gate takes negative rejection from 20/40 to 39/40 —
 unrelated queries very rarely receive a `source="knowledge_base"` answer
 any more. It pays for that by rejecting genuine rephrasings: 7/15. A user
 who asks "what money does south africa use" instead of "what is the
@@ -420,16 +427,16 @@ currency of south africa" gets nothing, because the two share almost no
 content words and TF-IDF has nothing else to go on.
 
 That trade-off is not a tuning mistake. `python sweep_gates.py` sweeps
-both gates together across 24 combinations; F1 stays between 0.687 and
-0.821 across the whole grid. The best point (threshold 0.15, F1 0.821)
-beats the shipped 0.25 (F1 0.800) by one paraphrase query, measured on the
+both gates together across 24 combinations; F1 stays between 0.656 and
+0.852 across the whole grid. The best point (threshold 0.15, F1 0.852)
+beats the shipped 0.25 (F1 0.830) by one paraphrase query, measured on the
 set the thresholds were chosen on, so the default was not moved for it.
 The gates trade against each other rather than compounding,
 so **no setting of these constants closes the paraphrase gap** — that
 requires a different representation. This is the measured,
 evidence-based case for semantic embeddings, and it names the specific
 number they have to beat: paraphrase 7/15 without giving back negative
-37/40.
+39/40.
 
 Note that the coverage gate is a TF-IDF-specific remedy — it exists
 because a TF-IDF vectorizer silently drops out-of-vocabulary terms.
@@ -473,6 +480,10 @@ negative rejection. Measured on 2026-09-27:
 | **TF-IDF, shipped** (threshold 0.25, coverage 0.7) | **15/15** | **7/15** | **37/40** | **0.800** |
 | Semantic at 0.25 | 15/15 | 14/15 | 17/40 | 0.707 |
 | Semantic at its best threshold, 0.55 | 15/15 | 12/15 | 34/40 | 0.857 |
+
+These rows are from 27 September, before the drafts served. Since the
+translation drafts began serving on 30 September, shipped TF-IDF rejects
+39/40 (F1 0.830; see above). The semantic rows have not been re-measured.
 
 **TF-IDF stays the default. Semantic embeddings are the better
 representation for paraphrases, and they still don't pass the rule:**
@@ -612,7 +623,7 @@ Stated here so they are read rather than discovered.
   across three small probe sets), which is not the same claim.
 - **The 70-query retrieval set was used to tune the coverage threshold**,
   so it is a development set, not an independent test set. The shipped
-  precision of 0.880 should be read as "measured on the set it was tuned
+  precision of 0.957 should be read as "measured on the set it was tuned
   on".
 - **Language detection is out of distribution on short queries.** The
   classifier was trained on NCHLT news sentences; short imperatives score
