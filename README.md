@@ -614,10 +614,13 @@ Stated here so they are read rather than discovered.
   and does not retry a wait it has been told is long — quick retries would
   spend more of the same quota. Transient 503s (the model being busy) *are*
   retried, up to `[model].generation_max_attempts`. If the main model is
-  still busy or out of quota after that, `gemini-3.5-flash-lite` is tried
-  before the busy message is shown (`[model].fallback_models`). It is
-  weaker at cross-lingual answers, and the badge names it whenever it
-  answered.
+  still busy or out of quota after that, or refuses the request (a retired
+  model, say), `gemini-3.5-flash-lite` and then `gemini-3.6-flash` are
+  tried before the busy message is shown (`[model].fallback_models`). Flash
+  Lite is weaker at cross-lingual answers, and the badge names the backup
+  whenever one answered. Re-measured on 2026-10-03, all three answered
+  10/10; `gemini-3.7-flash` and `3.8-flash` answered 3/10 and reject the
+  "minimal" thinking level Bao uses, so they are not backups.
 - **The 0.98 macro F1 is the original training-corpus evaluation.** This
   project independently validated the *deployed* inference path (20/20
   across three small probe sets), which is not the same claim.

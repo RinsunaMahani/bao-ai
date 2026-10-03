@@ -486,7 +486,7 @@ def _format_detection_badge(result) -> str:
     if result.used_documents:
         badge += " (with your uploaded documents)"
     if result.fallback_model:
-        badge += f" ({result.fallback_model}, because the main model was busy)"
+        badge += f" ({result.fallback_model}, because the main model was unavailable)"
     # Served because its numbers check out against the reviewed English
     # rows, but its wording has not been checked. The reader is told.
     if result.unreviewed_translation:

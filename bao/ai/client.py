@@ -17,7 +17,7 @@ import threading
 import time
 
 from bao.core.config import Settings
-from bao.core.exceptions import GenerationError, GenerationUnavailableError
+from bao.core.exceptions import GenerationError, GenerationUnavailableError, ModelRejectedError
 from bao.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -78,6 +78,62 @@ def _server_retry_delay(error: Exception) -> float | None:
     """How long the provider asked us to wait, in seconds, if it said."""
     match = _RETRY_DELAY_RE.search(str(error))
     return float(match.group(1)) if match else None
+
+
+# A model refusing the request itself, as opposed to being busy: retired
+# (404), not available to this key (403), or not accepting a setting (400).
+# Another model may accept the same request. See ModelRejectedError.
+_MODEL_REJECTED_STATUS_CODES = frozenset({400, 403, 404})
+
+
+def _api_failure(error: Exception, wait: float | None) -> GenerationError:
+    """The exception that tells the caller what kind of failure this was."""
+    if _is_transient(error):
+        return GenerationUnavailableError(str(error), retry_after=wait)
+    if getattr(error, "code", None) in _MODEL_REJECTED_STATUS_CODES:
+        return ModelRejectedError(str(error))
+    return GenerationError(str(error))
+
+
+class _ChainFailures:
+    """What has gone wrong across the main model and its backups, and
+    whether to try the next one.
+
+    The main model hands over when it is busy, or when it refused the
+    request itself (ModelRejectedError: retired, say). Any other failure of
+    the main model, such as an empty answer, is final: another model must
+    not be used to get round a refusal.
+
+    A backup's failure, whatever it is, never stops the list. It used to:
+    one retired backup name ended the chain, so every backup after it was
+    dead configuration.
+
+    The error raised when every model has failed is "busy" if any model was
+    busy, since the user should simply try again; otherwise it is the main
+    model's own error.
+    """
+
+    def __init__(self):
+        self.busy: GenerationUnavailableError | None = None
+        self.main_error: GenerationError | None = None
+
+    def may_continue(self, model: str, index: int, error: GenerationError, models: list[str]) -> bool:
+        busy = isinstance(error, GenerationUnavailableError)
+        if index == 0:
+            if not (busy or isinstance(error, ModelRejectedError)):
+                return False
+            self.main_error = error
+        if busy and self.busy is None:
+            self.busy = error
+        if index + 1 < len(models):
+            reason = "is unavailable" if busy else f"failed ({error})"
+            logger.warning(f"{model} {reason}; trying {models[index + 1]}.")
+        else:
+            logger.error(f"{model}, the last backup, failed: {error}")
+        return True
+
+    def final(self) -> GenerationError:
+        return self.busy or self.main_error
 
 
 def _is_transient(error: Exception) -> bool:
@@ -225,31 +281,22 @@ class GeminiClient:
 
         self._local.fallback_model = None
         models = [self.model_name, *self.fallback_models]
-        busy: GenerationUnavailableError | None = None
+        failures = _ChainFailures()
         for index, model in enumerate(models):
             state = {"produced": False}
             try:
                 yield from self._stream_from(model, prompt, system_instruction, temperature, state)
                 return
-            except GenerationUnavailableError as e:
-                if state["produced"]:
-                    self._local.fallback_model = None
-                    raise
-                busy = e
-                if index + 1 < len(models):
-                    logger.warning(f"{model} is unavailable; trying {models[index + 1]}.")
-                    self._local.fallback_model = models[index + 1]
             except GenerationError as e:
-                if index == 0 or state["produced"]:
+                if state["produced"] or not failures.may_continue(model, index, e, models):
                     self._local.fallback_model = None
                     raise
-                # A backup failing for its own reasons (a retired model
-                # name, say) must not replace the real story, which is that
-                # the main model was busy.
-                logger.error(f"Fallback model {model} failed: {e}")
-                break
+                # Set before the next model streams, since the caller may
+                # read it as soon as the first piece arrives.
+                if index + 1 < len(models):
+                    self._local.fallback_model = models[index + 1]
         self._local.fallback_model = None
-        raise busy
+        raise failures.final()
 
     def _stream_from(self, model: str, prompt: str, system_instruction, temperature, state: dict):
         """One model's streamed attempts, retrying transient failures.
@@ -293,9 +340,9 @@ class GeminiClient:
                 if not retriable:
                     if _is_transient(e):
                         logger.warning(f"Gemini stream unavailable: {e}")
-                        raise GenerationUnavailableError(str(e), retry_after=wait) from e
-                    logger.error(f"Gemini streaming API error: {e}")
-                    raise GenerationError(str(e)) from e
+                    else:
+                        logger.error(f"Gemini streaming API error: {e}")
+                    raise _api_failure(e, wait) from e
                 logger.warning(
                     f"Gemini stream failed with a transient error "
                     f"(attempt {attempt + 1}/{self.max_attempts}); retrying: {e}"
@@ -319,22 +366,16 @@ class GeminiClient:
 
         self._local.fallback_model = None
         models = [self.model_name, *self.fallback_models]
-        busy: GenerationUnavailableError | None = None
+        failures = _ChainFailures()
         for index, model in enumerate(models):
             try:
                 text = self._generate_from(model, prompt, system_instruction, temperature)
                 self._local.fallback_model = model if index else None
                 return text
-            except GenerationUnavailableError as e:
-                busy = e
-                if index + 1 < len(models):
-                    logger.warning(f"{model} is unavailable; trying {models[index + 1]}.")
             except GenerationError as e:
-                if index == 0:
+                if not failures.may_continue(model, index, e, models):
                     raise
-                logger.error(f"Fallback model {model} failed: {e}")
-                break
-        raise busy
+        raise failures.final()
 
     def _generate_from(self, model: str, prompt: str, system_instruction, temperature) -> str:
         """One model's attempts, retrying transient failures."""
@@ -362,9 +403,9 @@ class GeminiClient:
                             )
                         else:
                             logger.error(f"Gemini API error: {e}")
-                        raise GenerationUnavailableError(str(e), retry_after=wait) from e
-                    logger.error(f"Gemini API error: {e}")
-                    raise GenerationError(str(e)) from e
+                    else:
+                        logger.error(f"Gemini API error: {e}")
+                    raise _api_failure(e, wait) from e
                 logger.warning(
                     f"Gemini call failed with a transient error "
                     f"(attempt {attempt + 1}/{self.max_attempts}); retrying: {e}"

@@ -23,11 +23,28 @@
 # real Xitsonga, and gravity in Afrikaans in real Afrikaans, both at 99%+
 # on the reply. gemini-3.5-flash-lite is the lighter fallback if this one
 # runs out — it is more available but weaker at cross-lingual answers.
+#
+# Re-measured on 2026-10-03, 10 calls each, no retries, at most 5 a minute,
+# asking "Explain calculus in Xitsonga in two sentences":
+#
+#   gemini-3.5-flash       10/10 ok, median 2.2 s, all Xitsonga   <- main
+#   gemini-3.5-flash-lite  10/10 ok, median 1.5 s, all Xitsonga   <- backup 1
+#   gemini-3.6-flash       10/10 ok, median 2.6 s, all Xitsonga   <- backup 2
+#   gemini-3.7-flash        3/10 ok (5x 503, 2x 429), median 16.5 s
+#   gemini-3.8-flash        3/10 ok (5x 503, 2x 429), median 6.0 s
+#
+# 3.7 and 3.8 were measured at thinking_level LOW. Both reject MINIMAL, the
+# level set below, with a 400 on every request, so either one as the main
+# model would need thinking_level changed too. They are left out of the
+# backups: busiest when the others are busy, slow, and small daily quotas.
 gemini_model = "gemini-3.5-flash"
-# Tried in order when gemini_model is busy (503) or out of quota (429),
-# after its own retries. A weaker answer beats "the model is busy", and the
-# badge says when a backup model answered. [] turns this off.
-fallback_models = ["gemini-3.5-flash-lite"]
+# Tried in order when gemini_model is busy (503), out of quota (429) or
+# refuses the request (404 retired, 403, 400), after its own retries. A
+# backup that fails does not stop the list. A weaker answer beats "the
+# model is busy", and the badge says when a backup model answered.
+# 3.6-flash allows only 20 requests a day, which is fine for a second
+# backup and is why it is not the main model. [] turns this off.
+fallback_models = ["gemini-3.5-flash-lite", "gemini-3.6-flash"]
 # Pan-African classifier (14 languages, disjoint from the 11 SA ones).
 # OFF by default: turning it on changes the detection path for EVERY
 # message, not just the new languages. Enable it, run
