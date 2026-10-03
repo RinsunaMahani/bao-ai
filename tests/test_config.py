@@ -100,6 +100,19 @@ def test_the_code_default_model_is_the_one_config_toml_chose():
     assert Settings().gemini_model == GEMINI_MODEL_DEFAULT
 
 
+def test_the_code_default_backups_are_the_ones_config_toml_chose():
+    """Same reason, for the backups. They were measured as the models that
+    actually answer (see config.toml); 3.7 and 3.8 Flash reject the
+    thinking level Bao uses.
+    """
+    from bao.core.config import GEMINI_FALLBACK_MODELS_DEFAULT, Settings
+
+    backups = Settings().gemini_fallback_models
+    assert backups == list(GEMINI_FALLBACK_MODELS_DEFAULT)
+    assert backups[0] == "gemini-3.5-flash-lite"
+    assert not {"gemini-3.7-flash", "gemini-3.8-flash"} & set(backups)
+
+
 def test_the_docker_image_contains_every_file_the_app_loads():
     """.dockerignore excluded the whole of docs/, and the web app loads its
     logo from docs/assets/. The image therefore could never render the page,

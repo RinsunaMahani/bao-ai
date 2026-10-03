@@ -56,6 +56,17 @@ class GenerationUnavailableError(GenerationError):
         self.retry_after = retry_after
 
 
+class ModelRejectedError(GenerationError):
+    """Raised when one model refused the request outright: it no longer
+    exists (404, a retired model), the key may not use it (403), or it does
+    not accept the request's settings (400; gemini-3.7-flash and 3.8-flash
+    reject the "minimal" thinking level, for one).
+
+    Retrying the same model cannot help, but another model may well
+    accept the identical request, so the client tries its backups.
+    """
+
+
 class SpeechError(BaoError):
     """Raised when text-to-speech or speech-to-text processing fails."""
 

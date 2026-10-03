@@ -40,12 +40,13 @@ ASSISTANT_LOGO_PATH = os.path.join(BASE_DIR, "docs", "assets", "logo.jpg")
 # chosen.
 GEMINI_MODEL_DEFAULT = "gemini-3.5-flash"
 
-# Tried, in order, when the main model is busy (503) or out of quota (429).
-# Free-tier quotas are per model, so a second model is a second budget as
-# well as a second queue. Observed live on 2026-09-28: gemini-3.5-flash
-# returned "high demand" on three attempts in a row, and a question that
-# needed no special capability got the busy message instead of an answer.
-GEMINI_FALLBACK_MODELS_DEFAULT = ("gemini-3.5-flash-lite",)
+# Tried, in order, when the main model is busy (503), out of quota (429) or
+# refuses the request (retired, say). Free-tier quotas are per model, so a
+# second model is a second budget as well as a second queue. Observed live
+# on 2026-09-28: gemini-3.5-flash returned "high demand" on three attempts
+# in a row, and a question that needed no special capability got the busy
+# message instead of an answer. See config.toml for why these two.
+GEMINI_FALLBACK_MODELS_DEFAULT = ("gemini-3.5-flash-lite", "gemini-3.6-flash")
 
 LABELS = [
     "English", "isiZulu", "isiXhosa", "Afrikaans", "Sesotho",
@@ -156,8 +157,8 @@ class Settings:
 
     @property
     def gemini_fallback_models(self) -> list[str]:
-        """Models to try, in order, when the main one is busy or out of
-        quota. An empty list turns the fallback off.
+        """Models to try, in order, when the main one is busy, out of
+        quota, or refuses the request. An empty list turns the fallback off.
         """
         models = self._raw.get("model", {}).get(
             "fallback_models", list(GEMINI_FALLBACK_MODELS_DEFAULT)

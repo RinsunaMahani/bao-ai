@@ -239,6 +239,77 @@ def test_both_models_busy_is_still_the_busy_error(client, monkeypatch):
     assert client.last_fallback_model() is None
 
 
+@pytest.mark.parametrize("code", [404, 403, 400])
+def test_a_main_model_that_refuses_the_request_hands_over(client, monkeypatch, code):
+    """404: the model was retired. 400: it rejects a setting, as 3.7 and
+    3.8 Flash reject the "minimal" thinking level. Retrying the same model
+    cannot help, and it is not tried twice; another model may accept the
+    identical request.
+    """
+    client.fallback_models = ["backup-model"]
+    calls = _responses(client, monkeypatch, [_ApiError(code), "backup answer"])
+
+    assert client.generate("hello") == "backup answer"
+    assert calls["models"] == ["test-model", "backup-model"]
+    assert client.last_fallback_model() == "backup-model"
+
+
+def test_a_broken_backup_does_not_stop_the_list(client, monkeypatch):
+    """It used to: the first backup that failed for any reason other than
+    being busy ended the chain, so every backup after it was dead
+    configuration.
+    """
+    client.fallback_models = ["retired-model", "second-backup"]
+    calls = _responses(client, monkeypatch, [_ApiError(503)] * 3 + [_ApiError(404), "second answer"])
+
+    assert client.generate("hello") == "second answer"
+    assert calls["models"][-2:] == ["retired-model", "second-backup"]
+    assert client.last_fallback_model() == "second-backup"
+
+
+def test_an_empty_answer_from_the_main_model_does_not_hand_over(client, monkeypatch):
+    """An empty answer can be a refusal. Asking another model the same
+    thing would be a way round it.
+    """
+    client.fallback_models = ["backup-model"]
+    calls = _responses(client, monkeypatch, ["", "backup answer"])
+
+    with pytest.raises(GenerationError):
+        client.generate("hello")
+    assert calls["models"] == ["test-model"]
+
+
+def test_every_model_refusing_reports_the_main_models_error(client, monkeypatch):
+    """Not "busy": trying again will not help, and the message should not
+    say it will."""
+    from bao.core.exceptions import ModelRejectedError
+
+    client.fallback_models = ["backup-model"]
+    _responses(client, monkeypatch, [_ApiError(404, "main retired"), _ApiError(404, "backup retired")])
+
+    with pytest.raises(ModelRejectedError, match="main retired"):
+        client.generate("hello")
+    assert client.last_fallback_model() is None
+
+
+def test_a_refused_main_model_and_a_busy_backup_is_busy(client, monkeypatch):
+    """Trying again later can work, so that is what the user is told."""
+    client.fallback_models = ["backup-model"]
+    _responses(client, monkeypatch, [_ApiError(404)] + [_ApiError(503)] * 3)
+
+    with pytest.raises(GenerationUnavailableError):
+        client.generate("hello")
+
+
+def test_a_stream_hands_over_from_a_retired_model(client, monkeypatch):
+    client.fallback_models = ["backup-model"]
+    calls = _stream(client, monkeypatch, [[_ApiError(404)], ["from ", "backup"]])
+
+    assert "".join(client.generate_stream("hi")) == "from backup"
+    assert calls["models"] == ["test-model", "backup-model"]
+    assert client.last_fallback_model() == "backup-model"
+
+
 def test_a_stream_hands_over_before_any_output(client, monkeypatch):
     client.fallback_models = ["backup-model"]
     calls = _stream(client, monkeypatch, [[_ApiError(503)]] * 3 + [["from ", "backup"]])

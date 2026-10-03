@@ -239,7 +239,7 @@ def test_the_badge_names_a_backup_model():
     from bao.ui.streamlit_app import _format_detection_badge
 
     badge = _format_detection_badge(_result(fallback_model="gemini-3.5-flash-lite"))
-    assert "gemini-3.5-flash-lite, because the main model was busy" in badge
+    assert "gemini-3.5-flash-lite, because the main model was unavailable" in badge
     assert "busy" not in _format_detection_badge(_result())
 
 
