@@ -10,7 +10,7 @@ import os
 import psutil
 import streamlit as st
 
-from bao.ai.orchestrator import Orchestrator
+from bao.ai.orchestrator import OFFLINE_NO_CONNECTION, Orchestrator
 from bao.bootstrap import build_orchestrator, for_session
 from bao.core.config import ASSISTANT_LOGO_PATH, LABELS, PAN_AFRICAN_LABELS, Settings
 from bao.core.security import escape_markdown, safe_markdown
@@ -179,10 +179,23 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
         st.markdown("---")
 
         st.subheader("System Status")
-        if orchestrator.gemini_client.is_available():
-            st.success("Online (Gemini + RAG)")
-        else:
+        # Offline on demand, so a demonstration does not depend on turning
+        # Wi-Fi off on a network nobody in the room controls. Keyed, so it
+        # keeps its value across reruns and "New conversation".
+        offline_mode = st.toggle(
+            "Offline mode",
+            key="offline_mode",
+            help="Answer only from the built-in knowledge base and your uploaded "
+                 "documents, with offline voices. No question is sent to Gemini.",
+        )
+        if offline_mode:
+            st.info("Offline mode: knowledge base and your uploads only")
+        elif not orchestrator.gemini_client.is_available():
             st.warning("Offline (Local RAG Only)")
+        elif st.session_state.get("connection_lost"):
+            st.warning("Offline: the internet could not be reached on the last question")
+        else:
+            st.success("Online (Gemini + RAG)")
 
         st.subheader("Live Telemetry")
         mem = psutil.virtual_memory()
@@ -491,6 +504,8 @@ def _format_detection_badge(result) -> str:
     # rows, but its wording has not been checked. The reader is told.
     if result.unreviewed_translation:
         badge += " · translation not yet reviewed by a first-language speaker"
+    if result.offline_reason:
+        badge += f" · answered offline: {result.offline_reason}"
     # Cross-lingual turns ("explain X in Xitsonga") answer in a different
     # language from the question. Showing it makes a wrong voice obvious.
     if result.speech_language and result.speech_language != result.detected_language:
@@ -516,6 +531,14 @@ def _transcribe(settings: Settings, audio_file) -> str | None:
     warning. Shared by the in-chat microphone and the legacy recorder so
     both paths behave identically.
     """
+    # The recognizer is Google's web service. In offline mode the clip is
+    # not sent, and the user is told why there is no transcription.
+    if st.session_state.get("offline_mode"):
+        st.warning(
+            "Voice input needs the internet (it uses Google's speech recognizer). "
+            "Type your question, or switch Offline mode off."
+        )
+        return None
     language = speech_input_language(
         st.session_state.get("stt_language"),
         st.session_state.get("last_language", "English"),
@@ -593,7 +616,9 @@ def _handle_turn(
             want_speech=False,
             on_chunk=on_chunk,
             language_override=language_override,
+            force_offline=st.session_state.get("offline_mode", False),
         )
+        st.session_state["connection_lost"] = result.offline_reason == OFFLINE_NO_CONNECTION
 
         placeholder.empty()
 

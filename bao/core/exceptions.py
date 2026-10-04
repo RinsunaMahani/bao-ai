@@ -56,6 +56,15 @@ class GenerationUnavailableError(GenerationError):
         self.retry_after = retry_after
 
 
+class NetworkUnavailableError(GenerationError):
+    """Raised when Google could not be reached at all: no connection, or
+    the name could not be resolved (Wi-Fi off reads as getaddrinfo failing).
+
+    Not "busy", and not worth retrying or handing to a backup model, which
+    would need the same connection. The caller answers offline instead.
+    """
+
+
 class ModelRejectedError(GenerationError):
     """Raised when one model refused the request outright: it no longer
     exists (404, a retired model), the key may not use it (403), or it does

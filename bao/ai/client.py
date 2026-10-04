@@ -17,7 +17,12 @@ import threading
 import time
 
 from bao.core.config import Settings
-from bao.core.exceptions import GenerationError, GenerationUnavailableError, ModelRejectedError
+from bao.core.exceptions import (
+    GenerationError,
+    GenerationUnavailableError,
+    ModelRejectedError,
+    NetworkUnavailableError,
+)
 from bao.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -86,8 +91,22 @@ def _server_retry_delay(error: Exception) -> float | None:
 _MODEL_REJECTED_STATUS_CODES = frozenset({400, 403, 404})
 
 
+# Failures to reach Google at all, as opposed to Google answering badly.
+# Measured: with Wi-Fi off the SDK raises httpx.ConnectError ("getaddrinfo
+# failed") at once, and a refused connection raises the same type. Each is
+# matched on type name, as _TRANSIENT_ERROR_NAMES is, so httpx need not be
+# imported here.
+_UNREACHABLE_ERROR_NAMES = frozenset({"connecterror", "connecttimeout", "proxyerror"})
+
+
+def _is_unreachable(error: Exception) -> bool:
+    return type(error).__name__.lower() in _UNREACHABLE_ERROR_NAMES
+
+
 def _api_failure(error: Exception, wait: float | None) -> GenerationError:
     """The exception that tells the caller what kind of failure this was."""
+    if _is_unreachable(error):
+        return NetworkUnavailableError(str(error))
     if _is_transient(error):
         return GenerationUnavailableError(str(error), retry_after=wait)
     if getattr(error, "code", None) in _MODEL_REJECTED_STATUS_CODES:
@@ -118,6 +137,9 @@ class _ChainFailures:
         self.main_error: GenerationError | None = None
 
     def may_continue(self, model: str, index: int, error: GenerationError, models: list[str]) -> bool:
+        if isinstance(error, NetworkUnavailableError):
+            # Every backup would need the same connection.
+            return False
         busy = isinstance(error, GenerationUnavailableError)
         if index == 0:
             if not (busy or isinstance(error, ModelRejectedError)):
@@ -185,6 +207,23 @@ class GeminiClient:
         # fallback on this visitor's badge.
         self._local = threading.local()
         self._setup_client()
+
+    def forget_last_call(self) -> None:
+        """Clears this thread's record of the last call, at the start of a
+        turn, so what a turn reports describes that turn. A turn may make
+        no call at all (a curated answer served as written), and without
+        this it would inherit the previous turn's "could not connect".
+        """
+        self._local.fallback_model = None
+        self._local.unreachable = False
+
+    def last_call_was_unreachable(self) -> bool:
+        """Whether this thread's last generation failed because Google
+        could not be reached at all. Callers that swallow the error (the
+        fact translator hands back the untranslated text) still need to
+        know the answer was given offline.
+        """
+        return getattr(self._local, "unreachable", False)
 
     def last_fallback_model(self) -> str | None:
         """The backup model that answered this thread's most recent call,
@@ -280,6 +319,7 @@ class GeminiClient:
             raise GenerationError("Gemini client is not available (missing SDK or API key).")
 
         self._local.fallback_model = None
+        self._local.unreachable = False
         models = [self.model_name, *self.fallback_models]
         failures = _ChainFailures()
         for index, model in enumerate(models):
@@ -288,6 +328,7 @@ class GeminiClient:
                 yield from self._stream_from(model, prompt, system_instruction, temperature, state)
                 return
             except GenerationError as e:
+                self._local.unreachable = isinstance(e, NetworkUnavailableError)
                 if state["produced"] or not failures.may_continue(model, index, e, models):
                     self._local.fallback_model = None
                     raise
@@ -333,6 +374,7 @@ class GeminiClient:
                 too_long = wait is not None and wait > _MAX_SERVER_RETRY_WAIT_SECONDS
                 retriable = (
                     _is_transient(e)
+                    and not _is_unreachable(e)
                     and not produced_any
                     and not too_long
                     and attempt < self.max_attempts - 1
@@ -365,6 +407,7 @@ class GeminiClient:
             raise GenerationError("Gemini client is not available (missing SDK or API key).")
 
         self._local.fallback_model = None
+        self._local.unreachable = False
         models = [self.model_name, *self.fallback_models]
         failures = _ChainFailures()
         for index, model in enumerate(models):
@@ -373,6 +416,7 @@ class GeminiClient:
                 self._local.fallback_model = model if index else None
                 return text
             except GenerationError as e:
+                self._local.unreachable = isinstance(e, NetworkUnavailableError)
                 if not failures.may_continue(model, index, e, models):
                     raise
         raise failures.final()
@@ -394,7 +438,10 @@ class GeminiClient:
             except Exception as e:
                 wait = _server_retry_delay(e)
                 too_long = wait is not None and wait > _MAX_SERVER_RETRY_WAIT_SECONDS
-                if not _is_transient(e) or too_long or attempt == self.max_attempts - 1:
+                if (
+                    _is_unreachable(e) or not _is_transient(e) or too_long
+                    or attempt == self.max_attempts - 1
+                ):
                     if _is_transient(e):
                         if too_long:
                             logger.warning(

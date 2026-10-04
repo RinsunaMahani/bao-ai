@@ -310,6 +310,55 @@ def test_a_stream_hands_over_from_a_retired_model(client, monkeypatch):
     assert client.last_fallback_model() == "backup-model"
 
 
+# --- no connection at all ---------------------------------------------------
+#
+# Measured: with Wi-Fi off the SDK raises httpx.ConnectError ("getaddrinfo
+# failed") immediately. Treated as busy, it was retried three times on each
+# of the three models and reported 22 seconds later as the provider being
+# busy. Matched by type name, like the real one.
+
+
+class ConnectError(Exception):
+    """Stands in for httpx.ConnectError."""
+
+
+def test_no_connection_is_one_attempt_and_no_backups(client, monkeypatch):
+    from bao.core.exceptions import NetworkUnavailableError
+
+    client.fallback_models = ["backup-model", "second-backup"]
+    calls = _responses(client, monkeypatch, [ConnectError("getaddrinfo failed")] * 9)
+
+    with pytest.raises(NetworkUnavailableError):
+        client.generate("hello")
+    assert calls["n"] == 1, "every backup would need the same connection"
+    assert client.last_call_was_unreachable()
+
+
+def test_a_stream_with_no_connection_is_one_attempt(client, monkeypatch):
+    from bao.core.exceptions import NetworkUnavailableError
+
+    client.fallback_models = ["backup-model"]
+    calls = _stream(client, monkeypatch, [[ConnectError("getaddrinfo failed")]] * 6)
+
+    with pytest.raises(NetworkUnavailableError):
+        list(client.generate_stream("hi"))
+    assert calls["n"] == 1
+    assert client.last_call_was_unreachable()
+
+
+def test_the_no_connection_record_lasts_until_the_next_turn(client, monkeypatch):
+    _responses(client, monkeypatch, [ConnectError("down"), "back again"])
+    with pytest.raises(GenerationError):
+        client.generate("first")
+    assert client.last_call_was_unreachable()
+
+    client.forget_last_call()
+    assert not client.last_call_was_unreachable()
+
+    assert client.generate("second") == "back again"
+    assert not client.last_call_was_unreachable()
+
+
 def test_a_stream_hands_over_before_any_output(client, monkeypatch):
     client.fallback_models = ["backup-model"]
     calls = _stream(client, monkeypatch, [[_ApiError(503)]] * 3 + [["from ", "backup"]])
