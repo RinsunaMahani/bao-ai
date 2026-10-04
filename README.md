@@ -252,6 +252,19 @@ For the console/voice demo:
 python bao_console.py
 ```
 
+### Offline mode
+
+The **Offline mode** switch in the sidebar answers only from the built-in
+knowledge base and the documents uploaded this session, with offline
+voices, and sends no question to Gemini. Voice input stays off in this
+mode, because the speech recognizer is Google's web service. The badge on
+each answer says when it was given offline and why.
+
+Losing the connection has the same effect without the switch. Bao answers
+the offline way at once, and the badge says the internet could not be
+reached. Before this, it retried every model and reported, 22 seconds later,
+that the provider was busy.
+
 ### A note on voices
 
 Speech output uses three backends, picked per language in

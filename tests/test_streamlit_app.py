@@ -193,6 +193,37 @@ def _result(**overrides):
     return PipelineResult(**fields)
 
 
+def test_offline_mode_answers_without_gemini_and_says_so(page):
+    """The switch for the demonstration. With it on, a question the
+    knowledge base cannot answer gets the offline reply rather than going
+    to Gemini, and the badge says why."""
+    from bao.ai.prompts import OFFLINE_NO_MATCH_MESSAGE
+
+    page.sidebar.toggle(key="offline_mode").set_value(True).run()
+    assert any("Offline mode" in i.value for i in page.sidebar.info)
+
+    page.chat_input[0].set_value("explain photosynthesis in detail").run()
+    assert not page.exception, [str(e.value) for e in page.exception]
+    reply = [m for m in page.chat_message if m.name == "assistant"][-1]
+    assert reply.markdown[-1].value == OFFLINE_NO_MATCH_MESSAGE
+    assert any("answered offline: offline mode is on" in c.value for c in page.caption)
+
+
+def test_offline_mode_survives_a_new_conversation(page):
+    page.sidebar.toggle(key="offline_mode").set_value(True).run()
+    next(b for b in page.sidebar.button if b.label == "New conversation").click().run()
+    assert page.session_state["offline_mode"] is True
+
+
+def test_the_badge_says_why_an_answer_was_given_offline():
+    from bao.ai.orchestrator import OFFLINE_NO_CONNECTION
+    from bao.ui.streamlit_app import _format_detection_badge
+
+    badge = _format_detection_badge(_result(source="knowledge_base", offline_reason=OFFLINE_NO_CONNECTION))
+    assert badge.endswith("· answered offline: the internet could not be reached")
+    assert "offline" not in _format_detection_badge(_result())
+
+
 def test_the_badge_says_when_a_translation_is_unreviewed():
     from bao.ui.streamlit_app import _format_detection_badge
 

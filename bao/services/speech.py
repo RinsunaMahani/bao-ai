@@ -520,7 +520,7 @@ def select_backend(target_language: str, preference: str = "auto") -> str | None
 
     preference: "auto" prefers edge where a real SA voice exists and falls
     back to MMS; "edge" and "mms" force one backend and return None rather
-    than silently using the other.
+    than silently using the other. "offline" is "auto" without edge.
     """
     if preference == "coqui":
         return "coqui" if _coqui_speaks(target_language) else None
@@ -543,7 +543,9 @@ def select_backend(target_language: str, preference: str = "auto") -> str | None
     # weights differ.
     if _HAS_MMS_BACKEND and target_language in LOCAL_VOICE_MODELS:
         return "mms"
-    if _HAS_EDGE_BACKEND and target_language in _EDGE_VOICES:
+    # "offline" is "auto" without edge, the one network voice service, for
+    # when the app is offline by choice or because it has no connection.
+    if preference != "offline" and _HAS_EDGE_BACKEND and target_language in _EDGE_VOICES:
         return "edge"
     # Before the generic MMS fall-through but after edge: the Coqui model
     # is a real voice for the language, where falling through to MMS means

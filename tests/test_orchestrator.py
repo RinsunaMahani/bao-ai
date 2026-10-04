@@ -917,6 +917,137 @@ def test_no_uploads_means_no_document_claim():
     assert "untrusted_document" not in client.prompts[-1]
 
 
+# --- No internet, and offline mode ------------------------------------------
+
+class ConnectError(Exception):
+    """Stands in for httpx.ConnectError, raised at once with Wi-Fi off."""
+
+
+def _no_internet_session(tmp_path, monkeypatch):
+    """The real client and pipeline; only the network is gone. Returns
+    (orchestrator, calls) where calls counts attempts to reach Google."""
+    calls = {"n": 0}
+
+    class _Models:
+        def generate_content(self, **kwargs):
+            calls["n"] += 1
+            raise ConnectError("[Errno 11001] getaddrinfo failed")
+
+        def generate_content_stream(self, **kwargs):
+            calls["n"] += 1
+            raise ConnectError("[Errno 11001] getaddrinfo failed")
+
+    gemini = GeminiClient(Settings(), api_key="test-key")
+    monkeypatch.setattr(gemini, "client", type("C", (), {"models": _Models()})())
+
+    kb = tmp_path / "kb.csv"
+    kb.write_text(
+        "Category,Question,Answer,Language,Canonical_Id,Verified\n"
+        "Facts,capital of south africa,Pretoria is the administrative capital.,English,x-1,verified\n"
+        "Greeting,avuxeni,Avuxeni! Ndzi nga ku pfuna njhani?,Xitsonga,,curated\n",
+        encoding="utf-8",
+    )
+    documents = DocumentRetriever()
+    documents.add_document(
+        "panel_facts.csv", "The MATH301 presentation is on 14 October 2026 in the Science Lecture Theatre."
+    )
+    orch = Orchestrator(
+        SecurityGuardrails(), _FixedDetector(), KnowledgeRetriever(str(kb)), gemini,
+        document_retriever=documents,
+    )
+    return orch, calls
+
+
+def test_with_no_internet_an_uploaded_document_is_shown_at_once(tmp_path, monkeypatch):
+    """Live, with the connection gone, this took 22 seconds and said the
+    provider was busy, and the uploaded document never appeared."""
+    from bao.ai.orchestrator import OFFLINE_NO_CONNECTION
+
+    orch, calls = _no_internet_session(tmp_path, monkeypatch)
+    result = orch.handle("when is the MATH301 presentation", on_chunk=lambda piece: None)
+
+    assert result.source == "document_context"
+    assert "14 October 2026" in result.text
+    assert result.offline_reason == OFFLINE_NO_CONNECTION
+    assert calls["n"] == 1, "one attempt: no retries, no backup models"
+    assert result.stage_timings["generation"] < 2000
+
+
+def test_with_no_internet_an_unanswerable_question_says_offline_not_busy(tmp_path, monkeypatch):
+    from bao.ai.prompts import OFFLINE_NO_MATCH_MESSAGE
+
+    orch, _ = _no_internet_session(tmp_path, monkeypatch)
+    result = orch.handle("explain photosynthesis")
+
+    assert result.source == "offline_fallback"
+    assert result.text == OFFLINE_NO_MATCH_MESSAGE
+
+
+def test_with_no_internet_a_fact_is_served_as_written_and_says_why(tmp_path, monkeypatch):
+    """Sesotho chosen, English fact: translation needs the internet, so
+    the fact is shown in English, and the badge can say why."""
+    from bao.ai.orchestrator import OFFLINE_NO_CONNECTION
+
+    orch, calls = _no_internet_session(tmp_path, monkeypatch)
+    result = orch.handle("capital of south africa", language_override="Sesotho")
+
+    assert result.source == "knowledge_base"
+    assert result.text == "Pretoria is the administrative capital."
+    assert result.offline_reason == OFFLINE_NO_CONNECTION
+    assert calls["n"] == 1
+
+
+def test_a_turn_that_needs_no_internet_does_not_inherit_the_last_ones_failure(tmp_path, monkeypatch):
+    orch, calls = _no_internet_session(tmp_path, monkeypatch)
+    orch.handle("explain photosynthesis")
+    assert calls["n"] == 1
+
+    result = orch.handle("avuxeni")  # a curated greeting, served as written
+    assert result.source == "knowledge_base"
+    assert calls["n"] == 1, "no call was made for this turn"
+    assert result.offline_reason is None
+
+
+def test_offline_mode_never_contacts_google(tmp_path, monkeypatch):
+    from bao.ai.orchestrator import OFFLINE_SWITCHED_ON
+
+    orch, calls = _no_internet_session(tmp_path, monkeypatch)
+    for question in ("when is the MATH301 presentation", "explain photosynthesis"):
+        result = orch.handle(question, force_offline=True, language_override="Sesotho")
+        assert result.offline_reason == OFFLINE_SWITCHED_ON
+    fact = orch.handle("capital of south africa", force_offline=True, language_override="Sesotho")
+    assert fact.text == "Pretoria is the administrative capital."
+    assert calls["n"] == 0
+
+
+def test_offline_answers_are_spoken_by_offline_voices(monkeypatch):
+    import bao.ai.orchestrator as orchestrator_module
+    from bao.ai.orchestrator import OFFLINE_SWITCHED_ON, PipelineResult
+
+    backends = []
+    monkeypatch.setattr(orchestrator_module, "resolve_voice_language",
+                        lambda language, **kwargs: (language, None))
+    monkeypatch.setattr(orchestrator_module, "synthesize_speech",
+                        lambda text, language, **kwargs: backends.append(kwargs["backend"]))
+    orch, _ = _session()
+    for reason in (OFFLINE_SWITCHED_ON, None):
+        orch.speak(PipelineResult(
+            text="Sawubona", detected_language="isiZulu", confidence=1.0, detection_backend="stub",
+            source="knowledge_base", latency_ms=1.0, text_language="isiZulu", offline_reason=reason,
+        ))
+    assert backends == ["offline", orch.tts_backend]
+
+
+def test_the_offline_voice_choice_never_uses_the_network_voices(monkeypatch):
+    import bao.services.speech as speech
+
+    monkeypatch.setattr(speech, "_HAS_EDGE_BACKEND", True)
+    monkeypatch.setattr(speech, "_HAS_MMS_BACKEND", True)
+    for language in ("English", "Afrikaans", "isiZulu"):
+        assert speech.select_backend(language) == "edge"
+        assert speech.select_backend(language, "offline") != "edge"
+
+
 # --- Unreviewed translations are labelled -------------------------------------
 
 def test_an_unreviewed_translation_is_flagged_on_the_result(tmp_path, monkeypatch):

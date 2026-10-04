@@ -62,6 +62,7 @@ from bao.ai.prompts import (
 from bao.core.exceptions import (
     GenerationError,
     GenerationUnavailableError,
+    NetworkUnavailableError,
     SecurityViolationError,
 )
 from bao.core.logging import get_logger
@@ -77,6 +78,12 @@ from bao.services.speech import resolve_voice_language, synthesize_speech, witho
 from bao.services.translation import translate_fact
 
 logger = get_logger(__name__)
+
+
+# Why a turn was answered offline, for the badge. None when it was not,
+# and when there is simply no API key (the sidebar already says so).
+OFFLINE_SWITCHED_ON = "offline mode is on"
+OFFLINE_NO_CONNECTION = "the internet could not be reached"
 
 
 def _differs(a: str | None, b: str | None) -> bool:
@@ -145,6 +152,9 @@ class PipelineResult:
     unreviewed_translation: bool = False
     # The user's uploaded documents were given to the model for this answer.
     used_documents: bool = False
+    # Why this turn was answered offline: OFFLINE_SWITCHED_ON or
+    # OFFLINE_NO_CONNECTION. speak() uses only offline voices when set.
+    offline_reason: str | None = None
 
 
 class Orchestrator:
@@ -225,6 +235,9 @@ class Orchestrator:
         """
         start = time.perf_counter()
         timings: dict[str, float] = {}
+        forget = getattr(self.gemini_client, "forget_last_call", None)
+        if callable(forget):
+            forget()
 
         # 1. Security. Invisible and reordering characters are removed first,
         # so everything downstream - detection, retrieval, memory and the
@@ -344,33 +357,51 @@ class Orchestrator:
             if counterpart:
                 logger.info(f"Serving the {reply_language} version of the matched fact.")
                 fact = counterpart
-        doc_context = self.document_retriever.search(user_input) if self.document_retriever else ""
+        excerpts = self.document_retriever.search(user_input) if self.document_retriever else ""
         timings["retrieval"] = self._elapsed_ms(stage)
 
         offline = should_use_offline(self.gemini_client, force_offline=force_offline)
+        offline_reason = OFFLINE_SWITCHED_ON if force_offline else None
 
         # 4/5/6. Generation branch + translation
         stage = time.perf_counter()
         fallback_model = None
+        used_documents = False
+        text = None
         if fact:
             text, source, text_language = self._respond_with_fact(
                 fact, reply_language, offline, chosen=language_override is not None
             )
-        elif offline:
-            if doc_context:
+            # The translator hands back the fact untranslated when the call
+            # fails, so the answer is right; the badge says why it is in
+            # the fact's own language.
+            if not offline and self._last_call_unreachable():
+                offline_reason = OFFLINE_NO_CONNECTION
+        elif not offline:
+            context = self._documents_for_generation(user_input) or excerpts
+            try:
+                text, source, text_language = self._respond_with_gemini(
+                    user_input, reply_language, context, on_chunk=on_chunk
+                )
+            except NetworkUnavailableError:
+                # Answered the way offline mode answers, at once. It used to
+                # be retried on every model and reported, 22 seconds later,
+                # as the provider being busy, without the uploaded
+                # document the offline path would have shown.
+                logger.warning("Google could not be reached; answering offline.")
+                offline_reason = OFFLINE_NO_CONNECTION
+            else:
+                used_documents = source == "gemini" and bool(context)
+                if source == "gemini":
+                    last = getattr(self.gemini_client, "last_fallback_model", None)
+                    fallback_model = last() if callable(last) else None
+        if text is None:
+            if excerpts:
                 text, source, text_language = (
-                    offline_document_excerpt(doc_context), "document_context", None
+                    offline_document_excerpt(excerpts), "document_context", None
                 )
             else:
                 text, source, text_language = OFFLINE_NO_MATCH_MESSAGE, "offline_fallback", "English"
-        else:
-            doc_context = self._documents_for_generation(user_input) or doc_context
-            text, source, text_language = self._respond_with_gemini(
-                user_input, reply_language, doc_context, on_chunk=on_chunk
-            )
-            if source == "gemini":
-                last = getattr(self.gemini_client, "last_fallback_model", None)
-                fallback_model = last() if callable(last) else None
         timings["generation"] = self._elapsed_ms(stage)
 
         # Memory update happens after generation, so the assistant's own
@@ -395,7 +426,8 @@ class Orchestrator:
                 source == "knowledge_base" and fact is not None
                 and not getattr(fact, "reviewed", True)
             ),
-            used_documents=source == "gemini" and bool(doc_context),
+            used_documents=used_documents,
+            offline_reason=offline_reason,
         )
 
         # 7. Speech (optional, and deliberately last)
@@ -460,7 +492,10 @@ class Orchestrator:
             mms_codes=self.tts_codes,
             speaking_rate=self.tts_speaking_rate,
             noise_scale=self.tts_noise_scale,
-            backend=self.tts_backend,
+            # Offline, by choice or not, the voice is offline too: the
+            # Microsoft voices are a network service, and offline mode
+            # that quietly used one would not be offline.
+            backend="offline" if result.offline_reason else self.tts_backend,
             on_error=errors.append,
             max_characters=self.max_speech_characters,
             on_trim=trims.append,
@@ -682,6 +717,8 @@ class Orchestrator:
                 pieces.append(piece)
                 on_chunk(piece)
             return "".join(pieces), "gemini", None
+        except NetworkUnavailableError:
+            raise  # handle() answers offline instead; see there.
         except GenerationUnavailableError as e:
             # The provider was busy or rate-limiting, and retrying inside
             # the client did not clear it. Told apart from a real failure
@@ -693,6 +730,10 @@ class Orchestrator:
         except GenerationError as e:
             logger.error(f"Generation failed: {e}")
             return GENERATION_ERROR_MESSAGE, "offline_fallback", "English"
+
+    def _last_call_unreachable(self) -> bool:
+        check = getattr(self.gemini_client, "last_call_was_unreachable", None)
+        return bool(check()) if callable(check) else False
 
     @staticmethod
     def _elapsed_ms(start: float) -> float:
