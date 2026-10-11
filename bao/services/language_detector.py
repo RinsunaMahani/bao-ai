@@ -246,7 +246,8 @@ def named_target_language(query: str) -> str | None:
     were read as requests to switch the reply language until this was
     added. The difference is what comes next: a request is followed by
     nothing, or by "please", "for a grade 10 learner", "with examples",
-    "how it works"; a mention is followed by the noun the name describes.
+    "how it works", "in two sentences"; a mention is followed by the noun
+    the name describes.
 
     Matching is case-insensitive because people type "xitsonga" and
     "Xitsonga" interchangeably, and it accepts the everyday names in
@@ -267,11 +268,26 @@ def named_target_language(query: str) -> str | None:
         followers = (
             "please|pls|plz|language|languages|only|for|so|too|instead|now|"
             "thanks|thank|again|if|because|rather|as|with|without|"
-            "what|how|why|when|where|who|which|about"
+            "what|how|why|when|where|who|which|about|briefly|concisely|"
+            r"step\s+by\s+step"
+        )
+        # How to answer, introduced by a second "in": "explain calculus in
+        # Xitsonga in two sentences", "in isiZulu in simple words". Without
+        # this the second "in" ended the match and the request was lost
+        # (seen live on 2026-10-11). Only the shape of an answer counts, so
+        # "taught in Afrikaans in a township school" stays a description.
+        shapes = (
+            r"in\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|"
+            r"a|an|a\s+few|a\s+couple\s+of|a\s+single|few|several)\s+"
+            r"(?:(?:short|simple|brief|clear|easy|plain)\s+)?"
+            r"(?:sentences?|words?|paragraphs?|lines?|points?|bullet\s+points?|"
+            r"bullets?|steps?|ways?|list|table)"
+            r"|in\s+(?:simple|plain|easy|everyday|basic|layman'?s)\s+(?:words|terms|language)"
+            r"|in\s+(?:detail|full|brief|short|summary|a\s+nutshell|steps|points|bullet\s+points)"
         )
         _TARGET_LANGUAGE_RE = re.compile(
             rf"\bin\s+({pattern})"
-            rf"(?=\s*$|\s*[.,!?;:)\]\"'»”’]|\s+(?:{followers})\b)",
+            rf"(?=\s*$|\s*[.,!?;:)\]\"'»”’]|\s+(?:{followers})\b|\s+(?:{shapes})\b)",
             re.IGNORECASE,
         )
 

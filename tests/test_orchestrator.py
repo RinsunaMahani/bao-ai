@@ -776,6 +776,44 @@ def test_requests_with_more_after_the_name_are_still_recognised(query, expected)
     assert named_target_language(query) == expected
 
 
+@pytest.mark.parametrize("query,expected", [
+    ("Explain calculus in Xitsonga in two sentences.", "Xitsonga"),
+    ("explain photosynthesis in isiZulu in simple words", "isiZulu"),
+    ("tell me about TB in Sesotho in detail", "Sesotho"),
+    ("describe load shedding in Afrikaans in a few sentences", "Afrikaans"),
+    ("explain gravity in zulu in 3 sentences", "isiZulu"),
+    ("list the provinces in Setswana in bullet points", "Setswana"),
+    ("explain HIV in Tshivenda in short", "Tshivenda"),
+    ("explain it in Sepedi in a simple way", "Sepedi"),
+    ("explain this in Xitsonga briefly", "Xitsonga"),
+    ("explain how to vote in isiXhosa step by step", "isiXhosa"),
+])
+def test_a_request_followed_by_how_to_answer_is_recognised(query, expected):
+    """Live on 2026-10-11, "Explain calculus in Xitsonga in two sentences"
+    was sent with "Primary response language: English" and badged
+    "Replying in English": a second "in" after the name ended the match,
+    so anything said about the shape of the answer lost the request.
+    """
+    from bao.services.language_detector import named_target_language
+
+    assert named_target_language(query) == expected
+
+
+@pytest.mark.parametrize("query", [
+    "she grew up speaking in isiZulu in Durban",
+    "the classes were taught in Afrikaans in a township school",
+    "he wrote a novel in Sesotho in 1998",
+    "there are newspapers in isiXhosa in two provinces",
+])
+def test_a_second_in_that_is_not_about_the_answer_is_not_a_request(query):
+    """Only the shape of an answer counts after a second "in": a place, a
+    year or a count of anything else means the sentence is describing.
+    """
+    from bao.services.language_detector import named_target_language
+
+    assert named_target_language(query) is None
+
+
 def test_the_badge_says_why_the_reply_language_differs():
     """Two reasons can make the reply language differ from the detected
     one, and they mean opposite things.
