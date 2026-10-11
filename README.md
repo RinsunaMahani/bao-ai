@@ -231,6 +231,15 @@ on the day, and none of them are code bugs, so nothing in the test suite
 would catch them. `WARN` means a feature is unavailable and the app will
 say so; only `FAIL` blocks a demo.
 
+`--online` also checks that the models are still current, because Google
+retires them without breaking anything: a backup answers for a retired
+main model, and a deprecated one can be answered by its replacement, as
+`gemini-3.5-flash` was by `gemini-3.6-flash` from 2026-10-08. It warns
+when a backup answered instead of the main model, when Google answered
+with a different model (the app's log says so too, on the first such
+reply), when a backup no longer exists, and from 60 days before an
+announced shutdown (`GEMINI_SHUTDOWN_DATES` in `bao/core/config.py`).
+
 ### Run locally
 
 ```bash
@@ -610,30 +619,50 @@ Stated here so they are read rather than discovered.
   Microsoft neural locale (Amharic, French, Somali, Swahili) — all probed
   on 2026-09-18 rather than assumed. Igbo and Lingala have no voice:
   `mms-tts-ibo` and `mms-tts-lin` 404 under every code tried.
-- **Luganda is detected as Xitsonga.** The pan-African model identifies it
-  correctly but at 43% confidence, just under the 44% that English reaches
-  as Nigerian Pidgin. Admitting Luganda would mean relabelling English, so
-  24 of 25 languages route correctly and this one does not. Reproduce with
-  `python scripts/probe_language_routing.py`. A Luganda speaker can still
-  get Luganda replies by choosing it under **Reply in** in the sidebar.
+- **Luganda is detected as Xitsonga, and short messages in several
+  pan-African languages are read as South African ones.** One full
+  sentence per language routes correctly for 24 of the 25 languages
+  (`python scripts/probe_language_routing.py`). Luganda scores 43%, under
+  the 50% the pan-African model needs to overrule the South African
+  classifier, and lowering that bar does not help: measured on 2026-10-11,
+  South African text reaches 43% too (a Xitsonga sentence read as
+  Swahili), so a 40% bar would misread South African answers, and short
+  Luganda sentences scored below it anyway. Short messages are the weak
+  spot. Of 112 five-to-seven-word sentences, 8 per language and written by
+  gemini-3.5-flash-lite rather than native speakers, 51 routed correctly:
+  Shona, Somali and Luganda 0 of 8 and Lingala 1 of 8, mostly read as
+  siSwati. Longer replies in the same languages routed 13 of 13. Anyone
+  affected can choose their language under **Reply in** in the sidebar.
 - **Gemini free-tier quotas are small, and they are per model.** Measured
-  on `gemini-3.6-flash`: 5 requests a minute and 20 a day, which is about
-  one demo. This deployment uses `gemini-3.5-flash`, chosen by measuring
-  availability across the flash models (see `config.toml`); switching
-  `[model].gemini_model` gives a fresh budget because each model has its
-  own. A knowledge-base fact translated into another language costs a
+  on `gemini-3.6-flash` on 2026-09-19: 5 requests a minute and 20 a day,
+  which is about one demo. Switching `[model].gemini_model` gives a fresh
+  budget because each model has its own. This deployment uses
+  `gemini-3.5-flash-lite`, measured on 2026-10-11 after Google deprecated
+  the previous main model, `gemini-3.5-flash` (see `config.toml`): asked
+  once in each of the ten non-English languages, it answered all ten, nine
+  in the language asked for, with a median of 0.7 seconds to the first
+  word. A knowledge-base fact translated into another language costs a
   request of its own. The app reports this as a quota
   message carrying the provider's own wait time rather than as a failure,
   and does not retry a wait it has been told is long — quick retries would
   spend more of the same quota. Transient 503s (the model being busy) *are*
   retried, up to `[model].generation_max_attempts`. If the main model is
   still busy or out of quota after that, or refuses the request (a retired
-  model, say), `gemini-3.5-flash-lite` and then `gemini-3.6-flash` are
-  tried before the busy message is shown (`[model].fallback_models`). Flash
-  Lite is weaker at cross-lingual answers, and the badge names the backup
-  whenever one answered. Re-measured on 2026-10-03, all three answered
-  10/10; `gemini-3.7-flash` and `3.8-flash` answered 3/10 and reject the
-  "minimal" thinking level Bao uses, so they are not backups.
+  model, say), `gemini-3.1-flash-lite` and then `gemini-3.6-flash` are
+  tried before the busy message is shown (`[model].fallback_models`), and
+  the badge names the backup whenever one answered. `gemini-3.8-flash`
+  rejects the "minimal" thinking level Bao uses, so it is not a backup.
+- **An isiNdebele answer can still come back in isiZulu, about one time
+  in five.** Asked in English for isiNdebele, all three models Bao uses
+  answered in isiZulu (measured 2026-10-11), though a question written in
+  isiNdebele was answered in isiNdebele. Naming the language more fully
+  ("South African isiNdebele, also called Southern Ndebele; not isiZulu")
+  did not help, at 1 of 5, and neither did more thinking, at 0 of 5.
+  Naming the words that differ did: the system instruction now tells the
+  model to write *begodu*, not *futhi*, *namkha*, not *noma*, and *tjh*
+  where isiZulu writes *sh* (`prompts.LANGUAGE_LINES`), and 8 of 10
+  answers came back in isiNdebele. The other nine languages came back in
+  the language asked for.
 - **The 0.98 macro F1 is the original training-corpus evaluation.** This
   project independently validated the *deployed* inference path (20/20
   across three small probe sets), which is not the same claim.

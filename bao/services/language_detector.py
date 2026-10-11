@@ -246,7 +246,8 @@ def named_target_language(query: str) -> str | None:
     were read as requests to switch the reply language until this was
     added. The difference is what comes next: a request is followed by
     nothing, or by "please", "for a grade 10 learner", "with examples",
-    "how it works"; a mention is followed by the noun the name describes.
+    "how it works", "in two sentences"; a mention is followed by the noun
+    the name describes.
 
     Matching is case-insensitive because people type "xitsonga" and
     "Xitsonga" interchangeably, and it accepts the everyday names in
@@ -267,11 +268,26 @@ def named_target_language(query: str) -> str | None:
         followers = (
             "please|pls|plz|language|languages|only|for|so|too|instead|now|"
             "thanks|thank|again|if|because|rather|as|with|without|"
-            "what|how|why|when|where|who|which|about"
+            "what|how|why|when|where|who|which|about|briefly|concisely|"
+            r"step\s+by\s+step"
+        )
+        # How to answer, introduced by a second "in": "explain calculus in
+        # Xitsonga in two sentences", "in isiZulu in simple words". Without
+        # this the second "in" ended the match and the request was lost
+        # (seen live on 2026-10-11). Only the shape of an answer counts, so
+        # "taught in Afrikaans in a township school" stays a description.
+        shapes = (
+            r"in\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|"
+            r"a|an|a\s+few|a\s+couple\s+of|a\s+single|few|several)\s+"
+            r"(?:(?:short|simple|brief|clear|easy|plain)\s+)?"
+            r"(?:sentences?|words?|paragraphs?|lines?|points?|bullet\s+points?|"
+            r"bullets?|steps?|ways?|list|table)"
+            r"|in\s+(?:simple|plain|easy|everyday|basic|layman'?s)\s+(?:words|terms|language)"
+            r"|in\s+(?:detail|full|brief|short|summary|a\s+nutshell|steps|points|bullet\s+points)"
         )
         _TARGET_LANGUAGE_RE = re.compile(
             rf"\bin\s+({pattern})"
-            rf"(?=\s*$|\s*[.,!?;:)\]\"'»”’]|\s+(?:{followers})\b)",
+            rf"(?=\s*$|\s*[.,!?;:)\]\"'»”’]|\s+(?:{followers})\b|\s+(?:{shapes})\b)",
             re.IGNORECASE,
         )
 
@@ -642,6 +658,21 @@ class SklearnLanguageDetector(LanguageDetector):
         )
 
 
+# Words of Nigerian Pidgin that English practically never contains. The
+# pan-African model has no English to choose, so English comes back as
+# Nigerian Pidgin, its English-lexifier neighbour, and the longer and more
+# formal the English the more confidently. Measured on 2026-10-11: 9 of 78
+# English questions and 11 of 28 English knowledge-base answers scored
+# 51-78%, while genuine Pidgin scored 47-97%, so no threshold separates the
+# two. Left out on purpose: "wan" (WAN), "sha" (SHA-256) and "na" (sodium),
+# which do turn up in English answers.
+_PIDGIN_WORDS = re.compile(
+    r"\b(?:dey|abeg|wetin|una|sabi|pikin|wahala|comot|wey|sef|abi|shey|jare|"
+    r"oga|kampe|belle|dem|ehn)\b",
+    re.IGNORECASE,
+)
+
+
 class CompositeLanguageDetector(LanguageDetector):
     """A primary detector with a fallback consulted only when the primary
     is unsure.
@@ -709,6 +740,19 @@ class CompositeLanguageDetector(LanguageDetector):
     Nigerian Pidgin, which is a worse trade for an app whose lingua franca
     is English. 24 of 25 languages route correctly.
 
+    The 44% held for one short sentence. Longer, more formal English scores
+    up to 78% as Nigerian Pidgin, which put English questions and answers
+    over the bar (see _PIDGIN_WORDS). So between English and Pidgin the
+    words decide: without Pidgin words English stays English, whatever the
+    score, and with them a Pidgin lean (secondary_min) is enough.
+
+    That removed English as the reason Luganda is kept out, so a lower bar
+    was measured (2026-10-11, 363 South African and English texts, 139
+    pan-African). It does not work: South African text reaches 43% too (a
+    Xitsonga sentence read as Swahili, a Sesotho one as Lingala at 40%), so
+    0.4 would misread South African answers, and short Luganda sentences
+    score below 0.4 anyway. The bar stays at 0.5.
+
     These figures come from one sentence per language, not a held-out set.
     They are enough to show the old rule was wrong and to choose between
     two candidate thresholds; they are not a calibration claim.
@@ -746,6 +790,17 @@ class CompositeLanguageDetector(LanguageDetector):
         # unsure is what hid seven languages: the primary is confidently
         # wrong on input outside its eleven, so it never asked.
         fallback = self.secondary.detect(text)
+
+        # English against Nigerian Pidgin is decided by words, not scores,
+        # because the scores cannot separate them (see _PIDGIN_WORDS).
+        # Without Pidgin words, a Pidgin score is only a model that cannot
+        # say "English"; with them, a Pidgin lean is enough even over a
+        # confident English reading, which reads Pidgin as English too.
+        if result.language == "English" and fallback.language in ("Nigerian Pidgin", "pcm"):
+            if not _PIDGIN_WORDS.search(text):
+                return result
+            if fallback.confidence >= self.secondary_min:
+                return fallback
 
         # A strong secondary answer is evidence the input is not South
         # African at all, which is a claim the primary cannot make about

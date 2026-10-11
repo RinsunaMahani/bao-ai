@@ -27,9 +27,9 @@
 # Re-measured on 2026-10-03, 10 calls each, no retries, at most 5 a minute,
 # asking "Explain calculus in Xitsonga in two sentences":
 #
-#   gemini-3.5-flash       10/10 ok, median 2.2 s, all Xitsonga   <- main
-#   gemini-3.5-flash-lite  10/10 ok, median 1.5 s, all Xitsonga   <- backup 1
-#   gemini-3.6-flash       10/10 ok, median 2.6 s, all Xitsonga   <- backup 2
+#   gemini-3.5-flash       10/10 ok, median 2.2 s, all Xitsonga
+#   gemini-3.5-flash-lite  10/10 ok, median 1.5 s, all Xitsonga
+#   gemini-3.6-flash       10/10 ok, median 2.6 s, all Xitsonga
 #   gemini-3.7-flash        3/10 ok (5x 503, 2x 429), median 16.5 s
 #   gemini-3.8-flash        3/10 ok (5x 503, 2x 429), median 6.0 s
 #
@@ -37,14 +37,45 @@
 # level set below, with a 400 on every request, so either one as the main
 # model would need thinking_level changed too. They are left out of the
 # backups: busiest when the others are busy, slow, and small daily quotas.
-gemini_model = "gemini-3.5-flash"
+#
+# On 2026-10-08 Google deprecated gemini-3.5-flash and began answering
+# every request for it with gemini-3.6-flash (and 3.7-flash with
+# 3.8-flash): a request for 3.5-flash came back with model_version
+# "gemini-3.6-flash". So the choice was measured again on 2026-10-11: 10
+# calls each, no retries, at most 5 a minute, streamed, with the app's own
+# system instruction, asking "Explain calculus in two sentences in <X>"
+# once for each of the ten non-English languages. "In language" is Bao's
+# detector reading the reply as the language asked for.
+#
+#                           answered  in language  first word  full answer
+#   gemini-3.5-flash-lite     10/10       9/10        0.7 s       1.2 s   <- main
+#   gemini-3.1-flash-lite     10/10       9/10        2.8 s       3.2 s   <- backup 1
+#   gemini-3-flash-preview     9/10       9/10       11.7 s      16.6 s
+#   gemini-3.6-flash           9/10       8/10        1.1 s       2.0 s   <- backup 2
+#   gemini-3.8-flash (LOW)     8/10       8/10        7.0 s       7.0 s
+#
+# Every failure was a 503. Every language miss was isiNdebele answered in
+# isiZulu; only 3.8 and the preview wrote isiNdebele. gemini-2.5-flash and
+# 2.5-flash-lite return 404, "no longer available to new users". Asked the
+# way the app misreads ("...in Xitsonga in two sentences", sent with
+# "Primary response language: English"), 3.5-flash-lite and 3.6-flash both
+# answered 5 of 5 in the language asked for, so the cross-lingual weakness
+# Flash-Lite showed in September did not recur.
+#
+# The rule, fixed before the run: most answers in the language asked for,
+# ties to the faster first word. The preview model is left out despite its
+# score: 12 s to the first word, a 503 that took 25 s to arrive (and the
+# client retries a 503, so that wait can triple), and Google already lists
+# 3.6-flash as its replacement. 3.1-flash-lite is due to shut down on
+# 2027-05-07. A retired backup is skipped, but replace it before then.
+gemini_model = "gemini-3.5-flash-lite"
 # Tried in order when gemini_model is busy (503), out of quota (429) or
 # refuses the request (404 retired, 403, 400), after its own retries. A
 # backup that fails does not stop the list. A weaker answer beats "the
 # model is busy", and the badge says when a backup model answered.
-# 3.6-flash allows only 20 requests a day, which is fine for a second
-# backup and is why it is not the main model. [] turns this off.
-fallback_models = ["gemini-3.5-flash-lite", "gemini-3.6-flash"]
+# 3.6-flash allowed only 20 requests a day when measured on 2026-09-19,
+# which is fine for a second backup. [] turns this off.
+fallback_models = ["gemini-3.1-flash-lite", "gemini-3.6-flash"]
 # Pan-African classifier (14 languages, disjoint from the 11 SA ones).
 # OFF by default: turning it on changes the detection path for EVERY
 # message, not just the new languages. Enable it, run

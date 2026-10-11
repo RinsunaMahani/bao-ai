@@ -1,7 +1,8 @@
 """Everything a demo depends on, checked in one command.
 
     python scripts/preflight.py              # no API calls
-    python scripts/preflight.py --online     # also spends 1 Gemini request
+    python scripts/preflight.py --online     # also spends 1 Gemini request,
+                                             # and looks up the backup models
 
 Run this before presenting. The test suite proves the code is correct on
 any machine; this proves THIS machine is ready — that the model files
@@ -33,6 +34,9 @@ warnings.filterwarnings("ignore")
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 _results: list[tuple[str, str, str]] = []
 
+# How far ahead of an announced model shutdown to start warning.
+SHUTDOWN_NOTICE_DAYS = 60
+
 
 def record(status: str, name: str, detail: str = "") -> None:
     _results.append((status, name, detail))
@@ -40,7 +44,9 @@ def record(status: str, name: str, detail: str = "") -> None:
 
 
 def check_configuration() -> None:
-    from bao.core.config import Settings
+    from datetime import date
+
+    from bao.core.config import GEMINI_SHUTDOWN_DATES, Settings
 
     s = Settings()
     record(PASS, "config.toml", f"model={s.gemini_model}")
@@ -50,6 +56,18 @@ def check_configuration() -> None:
         "on (25 detected)" if s.pan_african_enabled else
         "off — only the 11 SA languages are detected",
     )
+    # In use, a shutdown passes unnoticed: the next model in the chain
+    # answers. This is where it gets noticed in time.
+    for model in [s.gemini_model, *s.gemini_fallback_models]:
+        when = GEMINI_SHUTDOWN_DATES.get(model)
+        if when is None:
+            continue
+        days = (when - date.today()).days
+        if days > SHUTDOWN_NOTICE_DAYS:
+            record(PASS, f"model {model}", f"announced shutdown {when}, {days} days away")
+        else:
+            state = "was due to shut down" if days < 0 else f"shuts down in {days} days,"
+            record(WARN, f"model {model}", f"{state} {when} — re-measure the models (see config.toml)")
 
 
 def check_language_detection() -> None:
@@ -186,18 +204,43 @@ def check_gemini(online: bool) -> None:
         record(PASS, "Gemini", "key present (pass --online to spend one request testing it)")
         return
 
+    from bao.ai.client import _same_model
     from bao.core.exceptions import GenerationUnavailableError
 
     try:
         reply = client.generate("Reply with exactly: ok")
-        record(PASS, "Gemini live call", f"replied {reply.strip()[:20]!r}")
     except GenerationUnavailableError as e:
         wait = f", retry in ~{e.retry_after:.0f}s" if e.retry_after else ""
         record(WARN, "Gemini live call",
                f"quota or capacity limit{wait} — switch [model].gemini_model "
                "in config.toml to another model, they have separate quotas")
+        return
     except Exception as e:
         record(FAIL, "Gemini live call", f"{type(e).__name__}: {str(e)[:90]}")
+        return
+    record(PASS, "Gemini live call", f"replied {reply.strip()[:20]!r}")
+
+    # A retired or refusing main model is covered by a backup, which keeps
+    # the demo alive and also hides the problem.
+    backup = client.last_fallback_model()
+    if backup:
+        record(WARN, "main model", f"{client.model_name} did not answer, {backup} did — "
+               "the log line above says why")
+    # Google can also retire a model by answering it with another, as it
+    # did gemini-3.5-flash with gemini-3.6-flash on 2026-10-08. Nothing fails.
+    asked = backup or client.model_name
+    served = client.last_served_model()
+    if served and not _same_model(asked, served):
+        record(WARN, "model routing", f"Google answered {asked} with {served}, so {asked} "
+               "has probably been deprecated — re-measure the models (see config.toml)")
+    # Looked up, not called: no generation quota is spent on the backups.
+    for model in client.fallback_models:
+        try:
+            client.client.models.get(model=model)
+            record(PASS, f"backup {model}", "available")
+        except Exception as e:
+            code = getattr(e, "code", None) or type(e).__name__
+            record(WARN, f"backup {model}", f"not available ({code}) — the app skips it")
 
 
 def main() -> int:

@@ -103,6 +103,22 @@ def _is_unreachable(error: Exception) -> bool:
     return type(error).__name__.lower() in _UNREACHABLE_ERROR_NAMES
 
 
+# Google can retire a model by answering its requests with another one, as
+# it did on 2026-10-08, when gemini-3.5-flash began answering as
+# gemini-3.6-flash. Nothing fails, so nothing says so for days; each
+# response's model_version does, from the first request. Each pair is
+# logged once per process, not once per request.
+_ROUTED_WARNED: set[tuple[str, str]] = set()
+
+
+def _same_model(requested: str, served: str) -> bool:
+    """A dated or numbered build of the requested model is the same model
+    ("gemini-3.5-flash-lite-07-2026"); another name is not
+    ("gemini-3.6-flash" answering for "gemini-3.5-flash").
+    """
+    return re.fullmatch(re.escape(requested) + r"(?:-\d[\d-]*)?", served) is not None
+
+
 def _api_failure(error: Exception, wait: float | None) -> GenerationError:
     """The exception that tells the caller what kind of failure this was."""
     if _is_unreachable(error):
@@ -216,6 +232,24 @@ class GeminiClient:
         """
         self._local.fallback_model = None
         self._local.unreachable = False
+        self._local.served_model = None
+
+    def last_served_model(self) -> str | None:
+        """The model Google says answered this thread's last successful
+        call: the response's model_version. It differs from the model
+        asked for when Google routes a retired model to its replacement.
+        """
+        return getattr(self._local, "served_model", None)
+
+    def _note_served(self, requested: str, served: str | None) -> None:
+        served = served.removeprefix("models/") if served else None
+        self._local.served_model = served
+        if served and not _same_model(requested, served) and (requested, served) not in _ROUTED_WARNED:
+            _ROUTED_WARNED.add((requested, served))
+            logger.warning(
+                f"Requests for {requested} are being answered by {served}: Google has "
+                "probably deprecated it. Re-measure the models and update config.toml."
+            )
 
     def last_call_was_unreachable(self) -> bool:
         """Whether this thread's last generation failed because Google
@@ -320,6 +354,7 @@ class GeminiClient:
 
         self._local.fallback_model = None
         self._local.unreachable = False
+        self._local.served_model = None
         models = [self.model_name, *self.fallback_models]
         failures = _ChainFailures()
         for index, model in enumerate(models):
@@ -353,6 +388,7 @@ class GeminiClient:
             # copy of the answer rather than replace the first. A stream
             # that has begun can only be failed, never retried.
             produced_any = False
+            served = None
             try:
                 stream = self.client.models.generate_content_stream(
                     model=model,
@@ -360,12 +396,14 @@ class GeminiClient:
                     config=self._config(system_instruction, temperature),
                 )
                 for chunk in stream:
+                    served = getattr(chunk, "model_version", None) or served
                     if chunk.text:
                         produced_any = True
                         state["produced"] = True
                         yield chunk.text
                 if not produced_any:
                     raise GenerationError("Gemini returned an empty response.")
+                self._note_served(model, served)
                 return
             except GenerationError:
                 raise
@@ -408,6 +446,7 @@ class GeminiClient:
 
         self._local.fallback_model = None
         self._local.unreachable = False
+        self._local.served_model = None
         models = [self.model_name, *self.fallback_models]
         failures = _ChainFailures()
         for index, model in enumerate(models):
@@ -432,6 +471,7 @@ class GeminiClient:
                 )
                 if not response.text:
                     raise GenerationError("Gemini returned an empty response.")
+                self._note_served(model, getattr(response, "model_version", None))
                 return response.text
             except GenerationError:
                 raise
