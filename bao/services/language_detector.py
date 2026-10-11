@@ -746,11 +746,12 @@ class CompositeLanguageDetector(LanguageDetector):
     words decide: without Pidgin words English stays English, whatever the
     score, and with them a Pidgin lean (secondary_min) is enough.
 
-    That also removes English as the reason Luganda is kept out. The next
-    highest score on South African input is 28% (measured 2026-10-11), so
-    a bar near 40% may admit Luganda's 43%. It is left at 0.5 until that is
-    measured on more than one sentence per language, since it changes the
-    detection path for every message.
+    That removed English as the reason Luganda is kept out, so a lower bar
+    was measured (2026-10-11, 363 South African and English texts, 139
+    pan-African). It does not work: South African text reaches 43% too (a
+    Xitsonga sentence read as Swahili, a Sesotho one as Lingala at 40%), so
+    0.4 would misread South African answers, and short Luganda sentences
+    score below 0.4 anyway. The bar stays at 0.5.
 
     These figures come from one sentence per language, not a held-out set.
     They are enough to show the old rule was wrong and to choose between

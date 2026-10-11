@@ -610,17 +610,20 @@ Stated here so they are read rather than discovered.
   Microsoft neural locale (Amharic, French, Somali, Swahili) — all probed
   on 2026-09-18 rather than assumed. Igbo and Lingala have no voice:
   `mms-tts-ibo` and `mms-tts-lin` 404 under every code tried.
-- **Luganda is detected as Xitsonga.** The pan-African model identifies it
-  correctly but at 43% confidence, under the 50% it must reach to overrule
-  the South African classifier, so 24 of 25 languages route correctly and
-  this one does not. The bar was set above the 44% that English reaches as
-  Nigerian Pidgin. English is now protected another way (it is only read as
-  Pidgin when it contains Pidgin words), and the highest score on any other
-  South African or English input measured is 28%, so a lower bar may admit
-  Luganda; it has not been changed, because it would change routing for
-  every message. Reproduce with `python scripts/probe_language_routing.py`.
-  A Luganda speaker can still get Luganda replies by choosing it under
-  **Reply in** in the sidebar.
+- **Luganda is detected as Xitsonga, and short messages in several
+  pan-African languages are read as South African ones.** One full
+  sentence per language routes correctly for 24 of the 25 languages
+  (`python scripts/probe_language_routing.py`). Luganda scores 43%, under
+  the 50% the pan-African model needs to overrule the South African
+  classifier, and lowering that bar does not help: measured on 2026-10-11,
+  South African text reaches 43% too (a Xitsonga sentence read as
+  Swahili), so a 40% bar would misread South African answers, and short
+  Luganda sentences scored below it anyway. Short messages are the weak
+  spot. Of 112 five-to-seven-word sentences, 8 per language and written by
+  gemini-3.5-flash-lite rather than native speakers, 51 routed correctly:
+  Shona, Somali and Luganda 0 of 8 and Lingala 1 of 8, mostly read as
+  siSwati. Longer replies in the same languages routed 13 of 13. Anyone
+  affected can choose their language under **Reply in** in the sidebar.
 - **Gemini free-tier quotas are small, and they are per model.** Measured
   on `gemini-3.6-flash` on 2026-09-19: 5 requests a minute and 20 a day,
   which is about one demo. Switching `[model].gemini_model` gives a fresh

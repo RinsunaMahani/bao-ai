@@ -402,10 +402,10 @@ def test_genuine_pidgin_is_still_pidgin(text, full_composite):
 
 
 def test_luganda_is_a_known_miss_and_stays_documented():
-    """Luganda scores 43%, under secondary_strong (0.5), which was set
-    above the 44% English hit as Nigerian Pidgin. English no longer needs
-    that margin (Pidgin over English needs Pidgin words), but the bar is
-    unchanged until a lower one is measured; see CompositeLanguageDetector.
+    """Luganda scores 43%, under secondary_strong (0.5). English no longer
+    needs that margin (Pidgin over English needs Pidgin words), but a
+    lower bar was measured and rejected: South African text reaches 43%
+    too. See CompositeLanguageDetector.
 
     Pinned as a KNOWN miss rather than left silent, so that if a better
     bundle ever lifts it above the bar this test fails and says so - a
