@@ -34,11 +34,9 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 ASSISTANT_NAME = "Bao"
 ASSISTANT_LOGO_PATH = os.path.join(BASE_DIR, "docs", "assets", "logo.jpg")
 # Matches config.toml's choice, so the app behaves the same if config.toml
-# fails to load. It was gemini-3.6-flash — the model whose free tier allows
-# 20 requests a DAY — so any failure to read the config quietly moved the
-# app onto its most restrictive quota. See config.toml for how 3.5-flash was
-# chosen.
-GEMINI_MODEL_DEFAULT = "gemini-3.5-flash"
+# fails to load. Measured on 2026-10-11, after Google deprecated the
+# previous main model, gemini-3.5-flash. See config.toml.
+GEMINI_MODEL_DEFAULT = "gemini-3.5-flash-lite"
 
 # Tried, in order, when the main model is busy (503), out of quota (429) or
 # refuses the request (retired, say). Free-tier quotas are per model, so a
@@ -46,7 +44,7 @@ GEMINI_MODEL_DEFAULT = "gemini-3.5-flash"
 # on 2026-09-28: gemini-3.5-flash returned "high demand" on three attempts
 # in a row, and a question that needed no special capability got the busy
 # message instead of an answer. See config.toml for why these two.
-GEMINI_FALLBACK_MODELS_DEFAULT = ("gemini-3.5-flash-lite", "gemini-3.6-flash")
+GEMINI_FALLBACK_MODELS_DEFAULT = ("gemini-3.1-flash-lite", "gemini-3.6-flash")
 
 LABELS = [
     "English", "isiZulu", "isiXhosa", "Afrikaans", "Sesotho",

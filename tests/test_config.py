@@ -109,8 +109,22 @@ def test_the_code_default_backups_are_the_ones_config_toml_chose():
 
     backups = Settings().gemini_fallback_models
     assert backups == list(GEMINI_FALLBACK_MODELS_DEFAULT)
-    assert backups[0] == "gemini-3.5-flash-lite"
+    assert backups[0] == "gemini-3.1-flash-lite"
     assert not {"gemini-3.7-flash", "gemini-3.8-flash"} & set(backups)
+
+
+def test_no_configured_model_is_one_google_answers_with_another():
+    """On 2026-10-08 Google deprecated gemini-3.5-flash and gemini-3.7-flash
+    and began answering their requests with 3.6-flash and 3.8-flash. A
+    routed name still answers, so nothing fails, which is what makes it easy
+    to miss: with 3.5-flash as the main model, 3.6-flash was the main model
+    and the second backup at once, and the badge named neither.
+    """
+    from bao.core.config import Settings
+
+    settings = Settings()
+    configured = {settings.gemini_model, *settings.gemini_fallback_models}
+    assert not {"gemini-3.5-flash", "gemini-3.7-flash"} & configured
 
 
 def test_the_docker_image_contains_every_file_the_app_loads():

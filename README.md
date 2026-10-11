@@ -617,23 +617,31 @@ Stated here so they are read rather than discovered.
   `python scripts/probe_language_routing.py`. A Luganda speaker can still
   get Luganda replies by choosing it under **Reply in** in the sidebar.
 - **Gemini free-tier quotas are small, and they are per model.** Measured
-  on `gemini-3.6-flash`: 5 requests a minute and 20 a day, which is about
-  one demo. This deployment uses `gemini-3.5-flash`, chosen by measuring
-  availability across the flash models (see `config.toml`); switching
-  `[model].gemini_model` gives a fresh budget because each model has its
-  own. A knowledge-base fact translated into another language costs a
+  on `gemini-3.6-flash` on 2026-09-19: 5 requests a minute and 20 a day,
+  which is about one demo. Switching `[model].gemini_model` gives a fresh
+  budget because each model has its own. This deployment uses
+  `gemini-3.5-flash-lite`, measured on 2026-10-11 after Google deprecated
+  the previous main model, `gemini-3.5-flash` (see `config.toml`): asked
+  once in each of the ten non-English languages, it answered all ten, nine
+  in the language asked for, with a median of 0.7 seconds to the first
+  word. A knowledge-base fact translated into another language costs a
   request of its own. The app reports this as a quota
   message carrying the provider's own wait time rather than as a failure,
   and does not retry a wait it has been told is long — quick retries would
   spend more of the same quota. Transient 503s (the model being busy) *are*
   retried, up to `[model].generation_max_attempts`. If the main model is
   still busy or out of quota after that, or refuses the request (a retired
-  model, say), `gemini-3.5-flash-lite` and then `gemini-3.6-flash` are
-  tried before the busy message is shown (`[model].fallback_models`). Flash
-  Lite is weaker at cross-lingual answers, and the badge names the backup
-  whenever one answered. Re-measured on 2026-10-03, all three answered
-  10/10; `gemini-3.7-flash` and `3.8-flash` answered 3/10 and reject the
-  "minimal" thinking level Bao uses, so they are not backups.
+  model, say), `gemini-3.1-flash-lite` and then `gemini-3.6-flash` are
+  tried before the busy message is shown (`[model].fallback_models`), and
+  the badge names the backup whenever one answered. `gemini-3.8-flash`
+  rejects the "minimal" thinking level Bao uses, so it is not a backup.
+- **An isiNdebele question can be answered in isiZulu.** In the
+  2026-10-11 measurement, all three models Bao uses answered the isiNdebele
+  question in isiZulu, which Bao's own detector read at 99%. Only
+  `gemini-3.8-flash` and `gemini-3-flash-preview` wrote isiNdebele, and
+  neither is in the chain: 3.8 rejects the thinking level Bao uses, and the
+  preview took about 12 seconds to start answering. The other nine
+  languages came back in the language asked for.
 - **The 0.98 macro F1 is the original training-corpus evaluation.** This
   project independently validated the *deployed* inference path (20/20
   across three small probe sets), which is not the same claim.
