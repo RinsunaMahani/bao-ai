@@ -646,7 +646,11 @@ Stated here so they are read rather than discovered.
   `gemini-3.8-flash` and `gemini-3-flash-preview` wrote isiNdebele, and
   neither is in the chain: 3.8 rejects the thinking level Bao uses, and the
   preview took about 12 seconds to start answering. The other nine
-  languages came back in the language asked for.
+  languages came back in the language asked for. It is a request for
+  isiNdebele made in English that goes wrong: a question written in
+  isiNdebele was answered in isiNdebele. Telling the model which isiNdebele
+  ("South African isiNdebele, also called Southern Ndebele; not isiZulu")
+  did not help, at 1 of 5 answers with or without it.
 - **The 0.98 macro F1 is the original training-corpus evaluation.** This
   project independently validated the *deployed* inference path (20/20
   across three small probe sets), which is not the same claim.
