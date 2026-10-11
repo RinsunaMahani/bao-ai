@@ -294,6 +294,76 @@ def test_failed_translations_are_not_cached(monkeypatch):
     clear_translation_cache()
 
 
+def test_a_translation_is_asked_for_as_the_translation_only(monkeypatch):
+    """On 2026-10-11 all 16 knowledge-base translations from
+    gemini-3.5-flash-lite came back decorated: "Here is the natural and
+    accurate translation into Xitsonga:", the text in quotation marks, and
+    once a "Note on terminology" and a second, "refined" version - all of
+    which the voice reads aloud. A translator instruction and a prompt
+    asking for the translation only stopped it (8 of 8 clean).
+    """
+    from bao.ai.client import GeminiClient
+    from bao.ai.prompts import TRANSLATION_SYSTEM_INSTRUCTION
+    from bao.core.config import Settings
+    from bao.services.translation import clear_translation_cache, translate_fact
+
+    clear_translation_cache()
+    sent = {}
+    client = GeminiClient(Settings())
+    monkeypatch.setattr(client, "is_available", lambda: True)
+
+    def generate(prompt, system_instruction=None, **kw):
+        sent.update(prompt=prompt, system_instruction=system_instruction)
+        return "Ringani 10177."
+
+    monkeypatch.setattr(client, "generate", generate)
+    translate_fact("Call 10177.", "Xitsonga", client)
+
+    assert sent["system_instruction"] == TRANSLATION_SYSTEM_INSTRUCTION
+    assert "translation only" in sent["prompt"]
+    assert '"Call 10177."' not in sent["prompt"], "a quoted fact invites a quoted answer"
+    clear_translation_cache()
+
+
+@pytest.mark.parametrize("raw,expected", [
+    # Shapes seen live on 2026-10-11, preamble in English or in the
+    # target language, text quoted or bold-quoted.
+    ('Here is the natural and accurate translation into Xitsonga:\n\n"Ringani 10177."',
+     "Ringani 10177."),
+    ("Hier is die natuurlike en akkurate vertaling in Afrikaans:\n\n\"Skakel 10177 vir 'n ambulans.\"",
+     "Skakel 10177 vir 'n ambulans."),
+    ('Molaetsa o fetoletsoe ho Sesotho:\n\n**"Letsa 10177."**', "Letsa 10177."),
+    ("“Shayela u-10177.”", "Shayela u-10177."),
+    ("Shayela u-10177.", "Shayela u-10177."),
+])
+def test_decoration_that_slips_through_is_removed(monkeypatch, raw, expected):
+    from bao.ai.client import GeminiClient
+    from bao.core.config import Settings
+    from bao.services.translation import clear_translation_cache, translate_fact
+
+    clear_translation_cache()
+    client = GeminiClient(Settings())
+    monkeypatch.setattr(client, "is_available", lambda: True)
+    monkeypatch.setattr(client, "generate", lambda prompt, **kw: raw)
+    assert translate_fact("Call 10177.", "Xitsonga", client) == expected
+    clear_translation_cache()
+
+
+def test_a_fact_that_opens_with_a_colon_line_keeps_it(monkeypatch):
+    """Only a line the fact itself does not have counts as a preamble."""
+    from bao.ai.client import GeminiClient
+    from bao.core.config import Settings
+    from bao.services.translation import clear_translation_cache, translate_fact
+
+    clear_translation_cache()
+    client = GeminiClient(Settings())
+    monkeypatch.setattr(client, "is_available", lambda: True)
+    monkeypatch.setattr(client, "generate", lambda prompt, **kw: "Tinomboro:\n\n10111 na 10177.")
+    fact = "Emergency numbers:\n\n10111 and 10177."
+    assert translate_fact(fact, "Xitsonga", client) == "Tinomboro:\n\n10111 na 10177."
+    clear_translation_cache()
+
+
 def test_language_override_replaces_detection(orchestrator):
     """Sign input has no spoken language to detect — the gloss labels are
     English words, so detection pinned every signed turn to English. The

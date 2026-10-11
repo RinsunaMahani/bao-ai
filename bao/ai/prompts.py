@@ -84,11 +84,25 @@ def open_ended_prompt(query: str, context: str = "") -> str:
     return query
 
 
+# Without this, gemini-3.5-flash-lite decorated every translation measured
+# on 2026-10-11: "Here is the natural and accurate translation into
+# Xitsonga:", the text in quotation marks, and once a "Note on terminology"
+# followed by a second, "refined" version. The voice reads all of it.
+TRANSLATION_SYSTEM_INSTRUCTION = (
+    "You translate verified facts for Bao, a South African assistant. Output only the "
+    "translated text: no introduction, no quotation marks, no markdown, no notes, no "
+    "alternatives and no explanation. Keep numbers, phone numbers, times, web addresses "
+    "and names exactly as written."
+)
+
+
 def translate_fact_prompt(fact: str, target_language: str) -> str:
+    # The fact is not wrapped in quotation marks: a quoted fact invited a
+    # quoted answer.
     return (
-        f"Translate the following verified fact naturally and accurately into "
-        f"{target_language}. Preserve the meaning exactly; do not add new "
-        f"information or omit details.\n\nFact: \"{fact}\""
+        f"Translate this verified fact into {target_language}. Preserve the meaning "
+        f"exactly; do not add or omit details. Reply with the {target_language} "
+        f"translation only.\n\n{fact}"
     )
 
 
