@@ -13,6 +13,7 @@ import os
 # config.toml was silently ignored; the floor was raised instead of the
 # fallback being patched - see pyproject.toml.
 import tomllib
+from datetime import date
 
 try:
     from dotenv import load_dotenv
@@ -45,6 +46,12 @@ GEMINI_MODEL_DEFAULT = "gemini-3.5-flash-lite"
 # in a row, and a question that needed no special capability got the busy
 # message instead of an answer. See config.toml for why these two.
 GEMINI_FALLBACK_MODELS_DEFAULT = ("gemini-3.1-flash-lite", "gemini-3.6-flash")
+
+# Shutdown dates Google has announced for models Bao may use, from
+# ai.google.dev/gemini-api/docs/deprecations (checked 2026-10-11).
+# scripts/preflight.py warns 60 days ahead. The app needs no date of its
+# own: a retired model answers 404 and the next one in the chain answers.
+GEMINI_SHUTDOWN_DATES = {"gemini-3.1-flash-lite": date(2027, 5, 7)}
 
 LABELS = [
     "English", "isiZulu", "isiXhosa", "Afrikaans", "Sesotho",

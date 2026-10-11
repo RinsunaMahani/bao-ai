@@ -397,6 +397,57 @@ def test_which_model_answered_is_tracked_per_thread(client, monkeypatch):
     assert client.last_fallback_model() == "backup-model"
 
 
+# --- a model Google answers with another ---------------------------------
+
+
+def _served(client, monkeypatch, model_version):
+    class _Models:
+        def generate_content(self, **kwargs):
+            return type("R", (), {"text": "ok", "model_version": model_version})()
+
+        def generate_content_stream(self, **kwargs):
+            yield type("Chunk", (), {"text": "o", "model_version": model_version})()
+            yield type("Chunk", (), {"text": "k", "model_version": model_version})()
+
+    monkeypatch.setattr(client, "client", type("C", (), {"models": _Models()})())
+
+
+def test_a_model_answered_by_another_is_reported_once(client, monkeypatch, caplog):
+    """On 2026-10-08 Google began answering gemini-3.5-flash as
+    gemini-3.6-flash. Nothing failed, so nothing said so for three days;
+    the response's model_version did, from the first request.
+    """
+    from bao.ai import client as client_module
+
+    client_module._ROUTED_WARNED.clear()
+    _served(client, monkeypatch, "replacement-model")
+    with caplog.at_level("WARNING"):
+        client.generate("hi")
+        client.generate("hi again")
+    assert client.last_served_model() == "replacement-model"
+    routed = [r for r in caplog.records if "being answered by replacement-model" in r.getMessage()]
+    assert len(routed) == 1, "once per process, not once per request"
+    client_module._ROUTED_WARNED.clear()
+
+
+def test_a_dated_build_of_the_same_model_is_not_a_reroute(client, monkeypatch, caplog):
+    from bao.ai import client as client_module
+
+    client_module._ROUTED_WARNED.clear()
+    _served(client, monkeypatch, "test-model-07-2026")
+    with caplog.at_level("WARNING"):
+        client.generate("hi")
+    assert not [r for r in caplog.records if "being answered by" in r.getMessage()]
+
+
+def test_a_stream_records_the_model_that_answered(client, monkeypatch):
+    _served(client, monkeypatch, "replacement-model")
+    assert "".join(client.generate_stream("hi")) == "ok"
+    assert client.last_served_model() == "replacement-model"
+    client.forget_last_call()
+    assert client.last_served_model() is None
+
+
 # --- when the provider names a wait, retrying makes things worse ---------
 
 

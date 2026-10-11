@@ -127,6 +127,24 @@ def test_no_configured_model_is_one_google_answers_with_another():
     assert not {"gemini-3.5-flash", "gemini-3.7-flash"} & configured
 
 
+def test_no_configured_model_is_past_its_announced_shutdown():
+    """The app survives a shutdown - a retired model answers 404 and the
+    next one takes over - which is exactly why nothing else would say so.
+    A backup that cannot answer is no backup. scripts/preflight.py warns
+    60 days before; this fails once the date has passed.
+    """
+    from datetime import date
+
+    from bao.core.config import GEMINI_SHUTDOWN_DATES, Settings
+
+    settings = Settings()
+    for model in [settings.gemini_model, *settings.gemini_fallback_models]:
+        when = GEMINI_SHUTDOWN_DATES.get(model)
+        assert when is None or date.today() < when, (
+            f"{model} was due to shut down on {when}: re-measure the models (see config.toml)"
+        )
+
+
 def test_the_docker_image_contains_every_file_the_app_loads():
     """.dockerignore excluded the whole of docs/, and the web app loads its
     logo from docs/assets/. The image therefore could never render the page,

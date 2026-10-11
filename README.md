@@ -231,6 +231,15 @@ on the day, and none of them are code bugs, so nothing in the test suite
 would catch them. `WARN` means a feature is unavailable and the app will
 say so; only `FAIL` blocks a demo.
 
+`--online` also checks that the models are still current, because Google
+retires them without breaking anything: a backup answers for a retired
+main model, and a deprecated one can be answered by its replacement, as
+`gemini-3.5-flash` was by `gemini-3.6-flash` from 2026-10-08. It warns
+when a backup answered instead of the main model, when Google answered
+with a different model (the app's log says so too, on the first such
+reply), when a backup no longer exists, and from 60 days before an
+announced shutdown (`GEMINI_SHUTDOWN_DATES` in `bao/core/config.py`).
+
 ### Run locally
 
 ```bash
