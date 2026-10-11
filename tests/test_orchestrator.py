@@ -364,6 +364,30 @@ def test_a_fact_that_opens_with_a_colon_line_keeps_it(monkeypatch):
     clear_translation_cache()
 
 
+def test_isindebele_is_told_apart_from_isizulu():
+    """Asked in English for isiNdebele, gemini-3.5-flash-lite answered in
+    isiZulu 4 times out of 5, whether or not the instruction spelled out
+    "South African isiNdebele ... not isiZulu", and 5 of 5 with more
+    thinking. Naming the words that differ brought 4 of 5 back in
+    isiNdebele (2026-10-11).
+    """
+    from bao.ai.prompts import system_instruction
+
+    instruction = system_instruction("isiNdebele")
+    assert "Primary response language: isiNdebele" in instruction
+    assert "not isiZulu" in instruction
+    assert "begodu, not futhi" in instruction
+
+
+def test_other_languages_keep_the_plain_language_line():
+    from bao.ai.prompts import system_instruction
+
+    for language in ["isiZulu", "Xitsonga", "English", "Swahili"]:
+        instruction = system_instruction(language)
+        assert f"Primary response language: {language}.\n" in instruction
+        assert "begodu" not in instruction
+
+
 def test_language_override_replaces_detection(orchestrator):
     """Sign input has no spoken language to detect — the gloss labels are
     English words, so detection pinned every signed turn to English. The

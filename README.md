@@ -640,17 +640,17 @@ Stated here so they are read rather than discovered.
   tried before the busy message is shown (`[model].fallback_models`), and
   the badge names the backup whenever one answered. `gemini-3.8-flash`
   rejects the "minimal" thinking level Bao uses, so it is not a backup.
-- **An isiNdebele question can be answered in isiZulu.** In the
-  2026-10-11 measurement, all three models Bao uses answered the isiNdebele
-  question in isiZulu, which Bao's own detector read at 99%. Only
-  `gemini-3.8-flash` and `gemini-3-flash-preview` wrote isiNdebele, and
-  neither is in the chain: 3.8 rejects the thinking level Bao uses, and the
-  preview took about 12 seconds to start answering. The other nine
-  languages came back in the language asked for. It is a request for
-  isiNdebele made in English that goes wrong: a question written in
-  isiNdebele was answered in isiNdebele. Telling the model which isiNdebele
+- **An isiNdebele answer can still come back in isiZulu, about one time
+  in five.** Asked in English for isiNdebele, all three models Bao uses
+  answered in isiZulu (measured 2026-10-11), though a question written in
+  isiNdebele was answered in isiNdebele. Naming the language more fully
   ("South African isiNdebele, also called Southern Ndebele; not isiZulu")
-  did not help, at 1 of 5 answers with or without it.
+  did not help, at 1 of 5, and neither did more thinking, at 0 of 5.
+  Naming the words that differ did: the system instruction now tells the
+  model to write *begodu*, not *futhi*, *namkha*, not *noma*, and *tjh*
+  where isiZulu writes *sh* (`prompts.LANGUAGE_LINES`), and 8 of 10
+  answers came back in isiNdebele. The other nine languages came back in
+  the language asked for.
 - **The 0.98 macro F1 is the original training-corpus evaluation.** This
   project independently validated the *deployed* inference path (20/20
   across three small probe sets), which is not the same claim.
