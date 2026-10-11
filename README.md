@@ -611,11 +611,16 @@ Stated here so they are read rather than discovered.
   on 2026-09-18 rather than assumed. Igbo and Lingala have no voice:
   `mms-tts-ibo` and `mms-tts-lin` 404 under every code tried.
 - **Luganda is detected as Xitsonga.** The pan-African model identifies it
-  correctly but at 43% confidence, just under the 44% that English reaches
-  as Nigerian Pidgin. Admitting Luganda would mean relabelling English, so
-  24 of 25 languages route correctly and this one does not. Reproduce with
-  `python scripts/probe_language_routing.py`. A Luganda speaker can still
-  get Luganda replies by choosing it under **Reply in** in the sidebar.
+  correctly but at 43% confidence, under the 50% it must reach to overrule
+  the South African classifier, so 24 of 25 languages route correctly and
+  this one does not. The bar was set above the 44% that English reaches as
+  Nigerian Pidgin. English is now protected another way (it is only read as
+  Pidgin when it contains Pidgin words), and the highest score on any other
+  South African or English input measured is 28%, so a lower bar may admit
+  Luganda; it has not been changed, because it would change routing for
+  every message. Reproduce with `python scripts/probe_language_routing.py`.
+  A Luganda speaker can still get Luganda replies by choosing it under
+  **Reply in** in the sidebar.
 - **Gemini free-tier quotas are small, and they are per model.** Measured
   on `gemini-3.6-flash` on 2026-09-19: 5 requests a minute and 20 a day,
   which is about one demo. Switching `[model].gemini_model` gives a fresh
