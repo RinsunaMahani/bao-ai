@@ -1259,3 +1259,38 @@ def test_the_voice_skips_english_glosses_and_keeps_the_rest(monkeypatch):
 def test_an_english_voice_reads_the_brackets(monkeypatch):
     said, _ = _speak(monkeypatch, "English")
     assert said == GLOSSED
+
+
+@pytest.mark.parametrize("filename,note,question,language", [
+    ("afrikaans.txt",
+     "Wie is Mnr X?\nMnr X is die persoon wat die studente 100% vir hul projekte sal gee, want dit is cool.",
+     "Wie is Mnr X?", "Afrikaans"),
+    ("isizulu.txt",
+     "Ungubani uMnu X?\nUMnu X ngumuntu ozonikeza abafundi u-100% emaphrojekthini abo ngoba kupholile.",
+     "Ungubani uMnu X?", "isiZulu"),
+])
+def test_an_offline_document_answer_is_voiced_from_the_document(monkeypatch, filename, note, question, language):
+    """Offline, an uploaded document is answered with the app's own English
+    line ("I'm offline right now...") and a "[Document: ...]" label before
+    the passage. The voice was chosen from that opening, so an Afrikaans
+    note detected at 100% was read by the English voice, and whatever the
+    voice, it read the English line and the label aloud (2026-10-18).
+    """
+    from bao.ai import orchestrator as orchestrator_module
+    from bao.bootstrap import build_orchestrator
+
+    _, orch = build_orchestrator()
+    orch.document_retriever.add_document(filename, note)
+    result = orch.handle(question, force_offline=True)
+    assert result.source == "document_context"
+    assert result.spoken_text == note
+
+    spoken = {}
+    monkeypatch.setattr(orchestrator_module, "resolve_voice_language", lambda lang, **kw: (lang, None))
+    monkeypatch.setattr(
+        orchestrator_module, "synthesize_speech",
+        lambda text, lang, **kw: spoken.update(text=text, language=lang),
+    )
+    orch.speak(result)
+    assert spoken["language"] == language
+    assert "offline" not in spoken["text"] and "[Document" not in spoken["text"]
