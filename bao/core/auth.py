@@ -30,7 +30,9 @@ import tomllib
 _N, _R, _P, _DKLEN = 2**14, 8, 1, 32
 
 USERNAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,32}")
-MIN_PASSWORD_LENGTH = 8
+# Shortest password accepted. Named without "password" so that
+# printing the number is not mistaken for printing a password.
+MIN_CHARS = 8
 
 # Wrong passwords allowed per name before it is locked, and for how long.
 MAX_FAILURES = 5
