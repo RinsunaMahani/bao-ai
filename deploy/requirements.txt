@@ -1,0 +1,6 @@
+# Streamlit Community Cloud installs this file (it sits beside the entry
+# point). Core app, the TFLite language classifier, and PDF uploads. No
+# speech stack: torch and the voice models are several GB.
+-r ../requirements.txt
+ai-edge-litert>=1.0.0
+pypdf>=4.0.0

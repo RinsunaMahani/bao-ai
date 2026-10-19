@@ -255,7 +255,25 @@ the laptop is on. To open it from a phone on the same network, on purpose:
 streamlit run bao/ui/streamlit_app.py --server.address 0.0.0.0
 ```
 
-For the console/voice demo:
+**Sign-in.** The web app asks for a username and password first. Make an
+account once, in a terminal in the project folder:
+
+```bash
+python scripts/add_user.py rinsuna            # asks for the password twice, hidden
+python scripts/add_user.py rinsuna --remove   # delete it
+python scripts/add_user.py --list             # who has an account
+```
+
+Accounts are local, so signing in works offline, with Wi-Fi off. Only a
+salted scrypt hash of each password is stored, in `users.toml` (never
+committed or built into the image). After five wrong passwords a name is
+locked for a minute, and the message never says whether the name exists.
+**Sign out** in the sidebar clears the conversation and uploads, for a
+shared computer. To switch sign-in off on a machine only you use, set
+`require_login = false` under `[auth]` in `config.toml`.
+
+For the console/voice demo (no sign-in: whoever has the terminal already
+has the machine):
 
 ```bash
 python bao_console.py
@@ -307,6 +325,9 @@ The image includes the TFLite classifier, the pan-African detector and PDF
 uploads, and runs offline without a `.env`. It leaves out speech (torch and
 the voice models are several GB). Compose mounts `bao/`, `data/` and
 `models/` from the host for development, so edits appear without a rebuild.
+`users.toml` is not in the image: make an account on the host, then
+uncomment the `users.toml` lines in `docker/docker-compose.yml` so the
+container reads it.
 
 It is hardened in the standard ways: an unprivileged user that cannot
 change the app's files, no compiler toolchain (1.28 GB, down from 1.74 GB),

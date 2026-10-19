@@ -23,7 +23,7 @@ def _reader(text: str):
 
 
 def test_credential_files_are_refused_by_name():
-    for name in (".env", ".env.production", "credentials.json", "id_rsa", "cert.p12"):
+    for name in (".env", ".env.production", "credentials.json", "id_rsa", "cert.p12", "users.toml"):
         assert findings(name, _reader("")), name
 
 

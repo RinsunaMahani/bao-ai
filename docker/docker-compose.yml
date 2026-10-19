@@ -13,6 +13,9 @@ services:
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
+      # Sign-in accounts, made on the host with scripts/add_user.py. Not in
+      # the image (.dockerignore); uncomment this and the volume below.
+      # - BAO_USERS_FILE=/run/bao/users.toml
     # Optional on purpose. The app runs fully offline without an API key,
     # but a plain `- ../.env` made compose refuse to start at all on a
     # fresh clone - "env file not found" - so the offline demo was
@@ -28,6 +31,7 @@ services:
       - ../models:/app/models:ro
       - ../data:/app/data:ro
       - ../bao:/app/bao:ro
+      # - ../users.toml:/run/bao/users.toml:ro
     # Standard container hardening: no privilege escalation (setuid
     # binaries cannot gain rights), and no Linux capabilities, none of
     # which a web app on an unprivileged port needs.

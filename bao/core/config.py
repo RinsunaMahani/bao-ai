@@ -236,6 +236,22 @@ class Settings:
         return int(self._raw.get("model", {}).get("max_output_tokens", 4096))
 
     @property
+    def require_login(self) -> bool:
+        """Whether the web app asks visitors to sign in. On by default:
+        the app holds an API key and people's questions.
+        """
+        return bool(self._raw.get("auth", {}).get("require_login", True))
+
+    @property
+    def users_file(self) -> str:
+        """The sign-in accounts file (see bao.core.auth). BAO_USERS_FILE
+        overrides config.toml, so tests and Docker can point elsewhere. A
+        relative path is taken from the repository root.
+        """
+        path = os.getenv("BAO_USERS_FILE") or self._raw.get("auth", {}).get("users_file", "users.toml")
+        return path if os.path.isabs(path) else os.path.join(BASE_DIR, path)
+
+    @property
     def similarity_threshold(self) -> float:
         return self._raw.get("retrieval", {}).get("default_similarity_threshold", 0.25)
 
