@@ -44,6 +44,7 @@ summarize or verify it.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -89,6 +90,19 @@ OFFLINE_NO_CONNECTION = "the internet could not be reached"
 def _differs(a: str | None, b: str | None) -> bool:
     """Whether two language names differ, ignoring case and spacing."""
     return (a or "").strip().lower() != (b or "").strip().lower()
+
+
+# The label DocumentRetriever.search() puts above each passage.
+_DOCUMENT_LABEL = re.compile(r"^\[Document: [^\]\n]*\]\n", re.MULTILINE)
+
+
+def _best_passage(excerpts: str) -> str:
+    """The first, best-matching passage of search() output, without its
+    label. Split on the labels, not on blank lines, since a passage can
+    contain blank lines of its own.
+    """
+    passages = [p.strip() for p in _DOCUMENT_LABEL.split(excerpts) if p.strip()]
+    return passages[0] if passages else excerpts.strip()
 
 
 @dataclass
@@ -155,6 +169,12 @@ class PipelineResult:
     # Why this turn was answered offline: OFFLINE_SWITCHED_ON or
     # OFFLINE_NO_CONNECTION. speak() uses only offline voices when set.
     offline_reason: str | None = None
+    # What the voice reads, when that is not the whole text on screen. For
+    # an offline document answer it is the best-matching passage alone:
+    # the app's English "I'm offline right now..." line and the
+    # "[Document: ...]" labels are for the reader. The voice language is
+    # read from it too, so an Afrikaans note gets the Afrikaans voice.
+    spoken_text: str | None = None
 
 
 class Orchestrator:
@@ -395,11 +415,13 @@ class Orchestrator:
                 if source == "gemini":
                     last = getattr(self.gemini_client, "last_fallback_model", None)
                     fallback_model = last() if callable(last) else None
+        spoken_text = None
         if text is None:
             if excerpts:
                 text, source, text_language = (
                     offline_document_excerpt(excerpts), "document_context", None
                 )
+                spoken_text = _best_passage(excerpts)
             else:
                 text, source, text_language = OFFLINE_NO_MATCH_MESSAGE, "offline_fallback", "English"
         timings["generation"] = self._elapsed_ms(stage)
@@ -428,6 +450,7 @@ class Orchestrator:
             ),
             used_documents=used_documents,
             offline_reason=offline_reason,
+            spoken_text=spoken_text,
         )
 
         # 7. Speech (optional, and deliberately last)
@@ -454,6 +477,13 @@ class Orchestrator:
             # the Sesotho voice, and so was the English "model is busy"
             # message: the choice was treated as the language of the words.
             speech_language = result.text_language
+        elif result.spoken_text:
+            # A document's words are in the document's language, whatever
+            # was asked for, so a choice does not overrule the detector.
+            speech_language = self._speech_language(
+                result.spoken_text,
+                fallback=result.reply_language or result.detected_language,
+            )
         else:
             speech_language = self._speech_language(
                 result.text,
@@ -478,7 +508,7 @@ class Orchestrator:
         # Glosses like "(pay slip)" or "(Submit)" help a reader and are the
         # reverse for a listener: an isiZulu voice reads English with
         # isiZulu pronunciation. The screen keeps them; the voice skips them.
-        text = result.text
+        text = result.spoken_text or result.text
         if spoken_language.strip().lower() != "english":
             text = without_bracketed(
                 text, lambda inner: self._is_gloss_to_skip(inner, spoken_language)

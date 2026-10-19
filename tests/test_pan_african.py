@@ -167,6 +167,34 @@ def test_unsure_primary_keeps_its_answer_when_secondary_is_also_unsure():
     assert composite.detect("hello there").language == "English"
 
 
+def test_strong_pidgin_over_english_needs_pidgin_words():
+    """The 44% ceiling held for the short probe sentences only. Longer,
+    more formal English scores higher as Nigerian Pidgin, because the
+    pan-African model has no English to choose instead: measured on
+    2026-10-11, 9 of 78 English questions and 11 of 28 English knowledge-
+    base answers scored 51-78%, and "What are the early signs of TB, and
+    where can I get tested?" was answered in Pidgin, live. Genuine Pidgin
+    scores 47-97%, so no threshold separates the two. Words do.
+    """
+    composite = CompositeLanguageDetector(
+        primary=_Stub("English", 0.99), secondary=_Stub("Nigerian Pidgin", 0.78)
+    )
+    english = "What are the early signs of TB, and where can I get tested?"
+    assert composite.detect(english).language == "English"
+    pidgin = "How you dey, abeg I wan know about health care for our area."
+    assert composite.detect(pidgin).language == "Nigerian Pidgin"
+
+
+def test_pidgin_over_another_primary_answer_is_unchanged():
+    """Only the English/Pidgin pair is confusable by construction. Over any
+    other primary answer the strong-secondary rule stands as it was.
+    """
+    composite = CompositeLanguageDetector(
+        primary=_Stub("siSwati", 0.42), secondary=_Stub("Nigerian Pidgin", 0.49)
+    )
+    assert composite.detect("na so e be").language == "Nigerian Pidgin"
+
+
 # --- With the real bundle, if present ------------------------------------
 
 
@@ -341,10 +369,43 @@ def test_languages_hidden_by_the_old_primary_gate_are_detected(
     assert full_composite.detect(text).language == expected
 
 
+# Questions and answers the real composite read as Nigerian Pidgin, at
+# 51-78%, before Pidgin over English needed Pidgin words (2026-10-11).
+_ENGLISH_READ_AS_PIDGIN = [
+    "What are the early signs of TB, and where can I get tested?",
+    "Can you please explain to me how I can apply for a SASSA grant and what documents I need to bring?",
+    "What should I do if I lose my matric certificate and need a replacement for a job application?",
+    "how do i apply for nsfas funding student loan",
+    "what number do i dial for the police",
+    "who is the current president of south africa",
+    "Visit your nearest SASSA office with your ID document to apply for a grant such as the "
+    "Older Persons Grant, Disability Grant or Child Support Grant.",
+    "Dial 112 from any cellphone for a general emergency. It connects you to police, "
+    "ambulance, or fire services, even without airtime.",
+]
+
+
+@pytest.mark.parametrize("text", _ENGLISH_READ_AS_PIDGIN)
+def test_english_is_not_relabelled_as_pidgin(text, full_composite):
+    """Each was answered, or would have been spoken, in Nigerian Pidgin."""
+    assert full_composite.detect(text).language == "English"
+
+
+@pytest.mark.parametrize("text", [
+    "How you dey, abeg I wan know about health care for our area.",
+    "Abeg, wetin I fit do if my belle dey pain me?",
+    "Na so e be, una go see am for clinic tomorrow.",
+    "I no sabi wetin dem dey talk, abeg explain am well well.",
+])
+def test_genuine_pidgin_is_still_pidgin(text, full_composite):
+    assert full_composite.detect(text).language == "Nigerian Pidgin"
+
+
 def test_luganda_is_a_known_miss_and_stays_documented():
-    """Luganda scores 43%, just under the 44% ceiling that English hits as
-    Nigerian Pidgin. Admitting it means relabelling English, which is the
-    worse trade for an app whose lingua franca is English.
+    """Luganda scores 43%, under secondary_strong (0.5). English no longer
+    needs that margin (Pidgin over English needs Pidgin words), but a
+    lower bar was measured and rejected: South African text reaches 43%
+    too. See CompositeLanguageDetector.
 
     Pinned as a KNOWN miss rather than left silent, so that if a better
     bundle ever lifts it above the bar this test fails and says so - a

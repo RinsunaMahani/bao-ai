@@ -9,7 +9,7 @@ asks the model to do.
 
 SYSTEM_INSTRUCTION_TEMPLATE = """\
 You are {assistant_name}, a multilingual assistant for South Africa.
-Primary response language: {language}.
+Primary response language: {language_line}
 
 Instructions:
 1. Respond naturally in {language} unless the user explicitly asks for another language.
@@ -29,8 +29,27 @@ Instructions:
 """
 
 
+# A fuller language line for a language the model mistakes for a close
+# neighbour. Measured on 2026-10-11 with gemini-3.5-flash-lite: asked in
+# English for isiNdebele, it answered in isiZulu 4 times out of 5 with the
+# plain line or with "South African isiNdebele ... not isiZulu", and 5 of 5
+# with more thinking. Naming the words that differ brought 4 of 5 back in
+# isiNdebele, with no change in speed.
+LANGUAGE_LINES = {
+    "isiNdebele": (
+        "isiNdebele (South African isiNdebele, also called Southern Ndebele). It is "
+        "not isiZulu: write begodu, not futhi; namkha, not noma; ngombana, not ngoba; "
+        "khulu, not kakhulu; and tjh where isiZulu writes sh."
+    ),
+}
+
+
 def system_instruction(language: str, assistant_name: str = "Bao") -> str:
-    return SYSTEM_INSTRUCTION_TEMPLATE.format(assistant_name=assistant_name, language=language)
+    return SYSTEM_INSTRUCTION_TEMPLATE.format(
+        assistant_name=assistant_name,
+        language=language,
+        language_line=LANGUAGE_LINES.get(language, f"{language}."),
+    )
 
 
 DOCUMENT_OPEN = "<untrusted_document>"
@@ -84,11 +103,25 @@ def open_ended_prompt(query: str, context: str = "") -> str:
     return query
 
 
+# Without this, gemini-3.5-flash-lite decorated every translation measured
+# on 2026-10-11: "Here is the natural and accurate translation into
+# Xitsonga:", the text in quotation marks, and once a "Note on terminology"
+# followed by a second, "refined" version. The voice reads all of it.
+TRANSLATION_SYSTEM_INSTRUCTION = (
+    "You translate verified facts for Bao, a South African assistant. Output only the "
+    "translated text: no introduction, no quotation marks, no markdown, no notes, no "
+    "alternatives and no explanation. Keep numbers, phone numbers, times, web addresses "
+    "and names exactly as written."
+)
+
+
 def translate_fact_prompt(fact: str, target_language: str) -> str:
+    # The fact is not wrapped in quotation marks: a quoted fact invited a
+    # quoted answer.
     return (
-        f"Translate the following verified fact naturally and accurately into "
-        f"{target_language}. Preserve the meaning exactly; do not add new "
-        f"information or omit details.\n\nFact: \"{fact}\""
+        f"Translate this verified fact into {target_language}. Preserve the meaning "
+        f"exactly; do not add or omit details. Reply with the {target_language} "
+        f"translation only.\n\n{fact}"
     )
 
 

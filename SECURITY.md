@@ -135,5 +135,14 @@ Stated so they are read, not discovered.
   attacker's model repository. Bao loads models only from Meta's official
   `facebook/mms-tts-*` repositories and the pinned Coqui revision. The
   speech stack is not in the Docker image, and CI audits only what ships.
+  A ninth, CVE-2026-80047 (GHSA-x9r9-c232-4q39, Dependabot alert 1, from
+  2026-10-06), covers every version coqui-tts accepts (4.49 to 5.8.1) and
+  has no fixed release yet: `load_custom_generate()` caches a model
+  repository's custom generation code before asking for consent, though
+  running it stays gated. It is reached only by generating text with
+  `transformers` and a `custom_generate` repository. Bao uses
+  `transformers` only to speak, through `VitsModel`, and coqui-tts passes
+  the argument on only in XTTS, which Bao does not load (checked
+  2026-10-11).
 - **The South African voice model is licensed CC-BY-NC-4.0** and has no
   published evaluation; see the README.
