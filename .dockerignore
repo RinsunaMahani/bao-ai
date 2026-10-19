@@ -6,6 +6,9 @@
 .env
 .env.*
 !.env.example
+# Sign-in accounts (password hashes). Mounted at run time instead.
+users.toml
+users.toml.tmp
 
 # Version control
 .git/

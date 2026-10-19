@@ -42,6 +42,16 @@ Dependabot, secret scanning) are checked by GitHub itself.
 - Docker Compose publishes the port on `127.0.0.1` only.
 - To share on a local network deliberately, see "Run locally" in the
   README.
+- The web app asks for a sign-in before anything else is set up
+  (`bao/core/auth.py`). Accounts are local, so it works offline, and
+  only a salted scrypt hash of each password is kept, in `users.toml`,
+  which `.gitignore`, `.dockerignore` and `scripts/check_archive.py` all
+  keep out of anything shared. Five wrong passwords lock a name for a
+  minute, across browser tabs, and an unknown name gets the same answer,
+  after the same work, as a wrong password. Signing out clears the
+  session's conversation and uploads.
+- Sign-in protects the page, not the machine: anyone at the laptop can
+  run `scripts/add_user.py`, or set `require_login = false`.
 
 ### Prompt injection (OWASP LLM01)
 

@@ -32,3 +32,7 @@ eval/report.md
 .DS_Store
 .vscode/
 .idea/
+
+# Sign-in accounts (password hashes) - see [auth] in config.toml
+users.toml
+users.toml.tmp

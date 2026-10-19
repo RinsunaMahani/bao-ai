@@ -66,10 +66,33 @@ def voice_controls(monkeypatch):
     monkeypatch.setattr(speech, "preload_in_background", lambda: None)
 
 
+TEST_USER, TEST_PASSWORD = "tester", "correct-horse-battery"
+
+
+@pytest.fixture(autouse=True)
+def accounts(tmp_path, monkeypatch):
+    """A throwaway accounts file holding one test account, so the page
+    tests sign in through the real form without touching users.toml."""
+    from bao.core.auth import hash_password, save_users
+
+    path = tmp_path / "users.toml"
+    save_users(str(path), {TEST_USER: hash_password(TEST_PASSWORD)})
+    monkeypatch.setenv("BAO_USERS_FILE", str(path))
+    return path
+
+
+def _sign_in(at, username=TEST_USER, password=TEST_PASSWORD):
+    at.text_input(key="sign_in_username").set_value(username)
+    at.text_input(key="sign_in_password").set_value(password)
+    at.button[0].click().run()
+    return at
+
+
 @pytest.fixture
 def page(voice_controls):
     at = AppTest.from_file(APP, default_timeout=TIMEOUT)
     at.run()
+    _sign_in(at)
     assert not at.exception, [str(e.value) for e in at.exception]
     at.sidebar.checkbox(key="speech_enabled").uncheck().run()
     return at
@@ -138,6 +161,7 @@ def test_the_page_survives_a_missing_logo(monkeypatch, voice_controls):
     monkeypatch.setattr(config, "ASSISTANT_LOGO_PATH", "/app/docs/assets/absent-logo.jpg")
     at = AppTest.from_file(APP, default_timeout=TIMEOUT)
     at.run()
+    _sign_in(at)
     at.sidebar.checkbox(key="speech_enabled").uncheck().run()
     at.chat_input[0].set_value("Avuxeni").run()   # exercises the chat avatar too
 
@@ -329,3 +353,61 @@ def test_a_choice_that_is_no_longer_offered_falls_back_to_automatic(page):
     from bao.ui.streamlit_app import REPLY_AUTO
     assert page.session_state["reply_in"] == REPLY_AUTO
     assert "Swahili" not in page.sidebar.selectbox(key="reply_in").options
+
+
+# --- signing in --------------------------------------------------------------
+
+
+def test_nothing_is_set_up_before_signing_in(voice_controls):
+    """No chat, no sidebar controls, and no per-visitor pipeline - which
+    holds the conversation and the uploads - until the visitor signs in."""
+    at = AppTest.from_file(APP, default_timeout=TIMEOUT).run()
+    assert not at.exception, [str(e.value) for e in at.exception]
+    assert not at.chat_input
+    assert "orchestrator" not in at.session_state
+    assert at.text_input(key="sign_in_password").proto.type == at.text_input(
+        key="sign_in_password").proto.PASSWORD
+
+
+def test_a_wrong_password_is_refused_without_saying_which_part(voice_controls):
+    at = AppTest.from_file(APP, default_timeout=TIMEOUT).run()
+    _sign_in(at, password="not-the-password")
+    assert not at.chat_input
+    assert any("Wrong username or password" in e.value for e in at.error)
+    _sign_in(at, username="nobody", password=TEST_PASSWORD)
+    assert any("Wrong username or password" in e.value for e in at.error)
+
+
+def test_signing_in_opens_the_app_and_names_the_account(page):
+    assert page.chat_input
+    assert any(f"Signed in as **{TEST_USER}**" in c.value for c in page.sidebar.caption)
+
+
+def test_signing_out_forgets_the_session(page):
+    """At a shared computer, the next person must not inherit the last
+    one's conversation or uploads."""
+    page.chat_input[0].set_value("Avuxeni").run()
+    page.session_state["orchestrator"].document_retriever.add_document("notes.txt", "Private notes.")
+
+    [b for b in page.sidebar.button if b.label == "Sign out"][0].click().run()
+
+    assert not page.exception, [str(e.value) for e in page.exception]
+    assert not page.chat_input
+    assert "orchestrator" not in page.session_state
+    assert "display_messages" not in page.session_state
+
+
+def test_too_many_wrong_passwords_lock_the_account(voice_controls):
+    at = AppTest.from_file(APP, default_timeout=TIMEOUT).run()
+    for _ in range(5):
+        _sign_in(at, username="lockout-probe", password="guess")
+    _sign_in(at, username="lockout-probe", password="guess")
+    assert any("Too many wrong attempts" in e.value for e in at.error)
+
+
+def test_without_accounts_the_page_says_how_to_make_one(voice_controls, accounts):
+    accounts.unlink()
+    at = AppTest.from_file(APP, default_timeout=TIMEOUT).run()
+    assert not at.exception, [str(e.value) for e in at.exception]
+    assert any("scripts/add_user.py" in w.value for w in at.warning)
+    assert not at.chat_input

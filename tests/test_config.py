@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 from bao.core.config import LABELS, Settings
 
 
@@ -231,3 +234,21 @@ def test_the_container_still_listens_beyond_its_own_loopback():
     assert "--server.address=0.0.0.0" in dockerfile
     assert '"127.0.0.1:8501:8501"' in compose, "published on the host's localhost only"
 
+
+
+def test_sign_in_is_on_and_the_accounts_file_stays_out_of_git(monkeypatch, tmp_path):
+    """The web app asks for a sign-in unless config.toml says otherwise,
+    and the accounts file, though it holds only hashes, is never
+    committed or built into the image."""
+    from bao.core.config import BASE_DIR, Settings
+
+    monkeypatch.delenv("BAO_USERS_FILE", raising=False)
+    settings = Settings()
+    assert settings.require_login is True
+    assert settings.users_file == os.path.join(BASE_DIR, "users.toml")
+    monkeypatch.setenv("BAO_USERS_FILE", str(tmp_path / "elsewhere.toml"))
+    assert Settings().users_file == str(tmp_path / "elsewhere.toml")
+
+    for ignore_file in (".gitignore", ".dockerignore"):
+        lines = (Path(BASE_DIR) / ignore_file).read_text(encoding="utf-8").splitlines()
+        assert "users.toml" in lines, ignore_file

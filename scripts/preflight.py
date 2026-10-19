@@ -179,6 +179,22 @@ def check_voices() -> None:
            if has_stt_backend() else "SpeechRecognition missing — typing still works")
 
 
+def check_sign_in() -> None:
+    from bao.core.auth import load_users
+    from bao.core.config import Settings
+
+    s = Settings()
+    if not s.require_login:
+        record(WARN, "sign-in", "off — anyone who can open the page can use the app")
+        return
+    users = load_users(s.users_file)
+    if users:
+        record(PASS, "sign-in", f"{len(users)} account(s) in {Path(s.users_file).name}")
+    else:
+        record(FAIL, "sign-in", "no accounts, so nobody can sign in — "
+               "run: python scripts/add_user.py <your name>")
+
+
 def check_security() -> None:
     from bao.core.security import SecurityGuardrails
 
@@ -257,6 +273,7 @@ def main() -> int:
         ("Documents", lambda: check_documents()),
         ("Speech", lambda: check_voices()),
         ("Security", lambda: check_security()),
+        ("Sign-in", lambda: check_sign_in()),
         ("Generation", lambda: check_gemini(args.online)),
     ):
         print(f"{name}:")

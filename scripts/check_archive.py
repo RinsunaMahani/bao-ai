@@ -34,7 +34,7 @@ import zipfile
 from collections.abc import Callable, Iterator
 from pathlib import Path, PurePath
 
-FORBIDDEN_NAMES = {".env", "credentials.json", "service-account.json", "id_rsa"}
+FORBIDDEN_NAMES = {".env", "credentials.json", "service-account.json", "id_rsa", "users.toml"}
 ALLOWED = {".env.example", ".env.template"}
 # Keystores that are always private. .pem and .key are judged by content.
 ALWAYS_SECRET_SUFFIXES = (".p12", ".pfx")

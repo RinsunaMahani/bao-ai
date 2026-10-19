@@ -12,6 +12,7 @@ import streamlit as st
 
 from bao.ai.orchestrator import OFFLINE_NO_CONNECTION, Orchestrator
 from bao.bootstrap import build_orchestrator, for_session
+from bao.core.auth import LoginGuard, load_users
 from bao.core.config import ASSISTANT_LOGO_PATH, LABELS, PAN_AFRICAN_LABELS, Settings
 from bao.core.security import escape_markdown, safe_markdown
 from bao.knowledge.loader import MAX_UPLOAD_BYTES, extract_text_from_bytes, has_pdf_support
@@ -106,6 +107,58 @@ def init_system():
     return settings, orchestrator, orchestrator.document_retriever
 
 
+@st.cache_resource
+def _login_guard() -> LoginGuard:
+    """One for the whole server, so wrong guesses count across tabs."""
+    return LoginGuard()
+
+
+def render_sign_in(settings: Settings) -> bool:
+    """Draws the sign-in page and returns whether the visitor may go on.
+
+    Runs before the pipeline is set up for the visitor, so nobody gets a
+    conversation memory or an upload store before signing in. The error
+    is the same for an unknown name and a wrong password, so it does not
+    reveal which names exist.
+    """
+    if not settings.require_login or st.session_state.get("user"):
+        return True
+
+    st.header("Sign in to Bao")
+    users = load_users(settings.users_file)
+    if not users:
+        st.warning(
+            "No accounts yet. On the computer running Bao, open a terminal in the "
+            "project folder and run\n\n`python scripts/add_user.py <your name>`\n\n"
+            "then reload this page."
+        )
+        return False
+
+    with st.form("sign_in"):
+        username = st.text_input("Username", key="sign_in_username")
+        password = st.text_input("Password", type="password", key="sign_in_password")
+        submitted = st.form_submit_button("Sign in")
+    if submitted:
+        guard = _login_guard()
+        locked = guard.seconds_locked(username)
+        if locked:
+            st.error(f"Too many wrong attempts. Try again in {locked} seconds.")
+        elif user := guard.check(users, username, password):
+            st.session_state.user = user
+            st.rerun()
+        else:
+            st.error("Wrong username or password.")
+    return False
+
+
+def sign_out() -> None:
+    """Forgets everything this browser session held - the conversation,
+    the uploads, the settings - so the next person at a shared computer
+    starts clean. A callback, so it runs before the page is redrawn.
+    """
+    st.session_state.clear()
+
+
 REPLY_AUTO = "Detect automatically"
 
 
@@ -152,6 +205,11 @@ def render_sidebar(settings: Settings, orchestrator: Orchestrator) -> None:
         st.caption("Multilingual South African AI Assistant")
         st.caption("Text-first, with optional speech output.")
         st.caption("\"Bao\" — short for baobab: deep roots, offline-first.")
+
+        if st.session_state.get("user"):
+            st.caption(f"Signed in as **{escape_markdown(st.session_state.user)}**")
+            st.button("Sign out", on_click=sign_out,
+                      help="Ends this session and clears the conversation and uploads.")
 
         # There was no way to start over. The last six exchanges are
         # prepended to every prompt for the rest of the session, so moving
@@ -699,6 +757,8 @@ def render_chat_input(settings: Settings) -> tuple[str, str] | None:
 
 
 def main() -> None:
+    if not render_sign_in(Settings()):
+        return
     settings, orchestrator, _ = init_system()
     render_sidebar(settings, orchestrator)
 

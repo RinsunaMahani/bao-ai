@@ -112,6 +112,15 @@ max_output_tokens = 4096
 # genuinely hard ones, or "default" to let the model choose.
 thinking_level = "MINIMAL"
 
+[auth]
+# Visitors to the web app sign in first. The accounts are local, so
+# signing in works offline, and the file holds password hashes only.
+# Make an account with:  python scripts/add_user.py <name>
+# The file is never committed (.gitignore) or built into the Docker image
+# (.dockerignore). false switches sign-in off, for a machine only you use.
+require_login = true
+users_file = "users.toml"
+
 [retrieval]
 default_similarity_threshold = 0.25
 # A high similarity score can still be answering a DIFFERENT question:
