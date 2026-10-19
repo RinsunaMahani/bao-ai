@@ -75,6 +75,26 @@ def load_users(path: str) -> dict[str, str]:
     return {str(name): str(value) for name, value in users.items()}
 
 
+def users_from_env(value: str | None) -> dict[str, str]:
+    """Accounts from the BAO_USERS environment variable, as "name:hash"
+    entries separated by commas or new lines. For hosts where a file
+    cannot be placed beside the app but secrets become environment
+    variables (Streamlit Community Cloud). Hashes contain neither ":" nor
+    ",", so the format is unambiguous; malformed entries are skipped.
+    """
+    users = {}
+    for entry in re.split(r"[,\n]", value or ""):
+        name, sep, stored = entry.strip().partition(":")
+        if sep and USERNAME_RE.fullmatch(name) and stored.startswith("scrypt$"):
+            users[name] = stored
+    return users
+
+
+def load_accounts(path: str) -> dict[str, str]:
+    """Every account the app accepts: the file, then BAO_USERS on top."""
+    return {**load_users(path), **users_from_env(os.getenv("BAO_USERS"))}
+
+
 def save_users(path: str, users: dict[str, str]) -> None:
     """Writes the accounts file. Names are validated by the caller, and
     hashes contain only base64 and "$", so plain quoting is safe.

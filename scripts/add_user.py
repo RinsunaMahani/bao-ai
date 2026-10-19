@@ -3,6 +3,7 @@
     python scripts/add_user.py rinsuna            # add, or change the password
     python scripts/add_user.py rinsuna --remove   # delete the account
     python scripts/add_user.py --list             # names only
+    python scripts/add_user.py rinsuna --secret   # print a BAO_USERS line for a host
 
 The password is asked for twice and never echoed or written down: only
 its scrypt hash goes into the accounts file ([auth] users_file in
@@ -33,6 +34,8 @@ def main() -> int:
     parser.add_argument("username", nargs="?")
     parser.add_argument("--remove", action="store_true", help="delete the account")
     parser.add_argument("--list", action="store_true", help="list account names")
+    parser.add_argument("--secret", action="store_true",
+                        help="print a name:hash line for the BAO_USERS secret instead of saving")
     args = parser.parse_args()
 
     path = Settings().users_file
@@ -62,6 +65,10 @@ def main() -> int:
     if getpass.getpass("Again: ") != password:
         print("The two passwords differ; nothing was changed.")
         return 1
+    if args.secret:
+        # For a host's secret settings (BAO_USERS); nothing is saved here.
+        print(f"{name}:{hash_password(password)}")
+        return 0
     existed = name in users
     users[name] = hash_password(password)
     save_users(path, users)

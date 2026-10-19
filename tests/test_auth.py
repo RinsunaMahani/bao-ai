@@ -8,8 +8,10 @@ from bao.core.auth import (
     USERNAME_RE,
     LoginGuard,
     hash_password,
+    load_accounts,
     load_users,
     save_users,
+    users_from_env,
     verify_password,
 )
 
@@ -102,3 +104,18 @@ def test_a_success_clears_earlier_failures(users):
     assert guard.check(users, "rinsuna", "correct horse") == "rinsuna"
     guard.check(users, "rinsuna", "guess")
     assert guard.seconds_locked("rinsuna") == 0, "the count started again after the success"
+
+
+def test_accounts_can_come_from_a_host_secret(tmp_path, monkeypatch):
+    """A hosted copy has no users.toml; its secrets arrive as environment
+    variables. Malformed entries are skipped rather than trusted."""
+    a, b = hash_password("first password"), hash_password("second one")
+    entries = f"alice:{a},\n bob:{b}, bad name:{a}, carol:plain, :{a}"
+    assert users_from_env(entries) == {
+        "alice": a, "bob": b}
+    assert users_from_env(None) == {}
+
+    path = str(tmp_path / "users.toml")
+    save_users(path, {"alice": hash_password("from the file")})
+    monkeypatch.setenv("BAO_USERS", f"bob:{b}")
+    assert set(load_accounts(path)) == {"alice", "bob"}

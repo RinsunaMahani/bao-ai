@@ -12,7 +12,7 @@ import streamlit as st
 
 from bao.ai.orchestrator import OFFLINE_NO_CONNECTION, Orchestrator
 from bao.bootstrap import build_orchestrator, for_session
-from bao.core.auth import LoginGuard, load_users
+from bao.core.auth import LoginGuard, load_accounts
 from bao.core.config import ASSISTANT_LOGO_PATH, LABELS, PAN_AFRICAN_LABELS, Settings
 from bao.core.security import escape_markdown, safe_markdown
 from bao.knowledge.loader import MAX_UPLOAD_BYTES, extract_text_from_bytes, has_pdf_support
@@ -125,7 +125,7 @@ def render_sign_in(settings: Settings) -> bool:
         return True
 
     st.header("Sign in to Bao")
-    users = load_users(settings.users_file)
+    users = load_accounts(settings.users_file)
     if not users:
         st.warning(
             "No accounts yet. On the computer running Bao, open a terminal in the "
